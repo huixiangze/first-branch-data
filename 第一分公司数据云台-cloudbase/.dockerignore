@@ -1,0 +1,11 @@
+# 容器不需要的文件（避免把自签名证书带进去触发 HTTPS 冲突）
+ssl/
+logs/
+data/
+node_modules/
+.git/
+*.zip
+*.tar.gz
+start.bat
+install-task.bat
+scripts/
