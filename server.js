@@ -90,13 +90,15 @@ function serveStatic(req, res, urlPath) {
       // SPA 回退到 index.html
       fs.readFile(path.join(PUBLIC, 'index.html'), function (e2, html) {
         if (e2) { res.writeHead(404); res.end('Not Found'); return; }
-        res.writeHead(200, { 'Content-Type': MIME['.html'] });
+        res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-store' });
         res.end(html);
       });
       return;
     }
     const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+    // HTML 绝不缓存；JS/CSS 每次都要回源校验，避免浏览器/边缘节点拿旧脚本
+    const cc = (ext === '.html') ? 'no-store' : 'no-cache, must-revalidate';
+    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': cc });
     res.end(data);
   });
 }
@@ -120,7 +122,7 @@ function getSessionUser(req) {
 }
 
 function sendJson(res, code, obj) {
-  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(obj));
 }
 
