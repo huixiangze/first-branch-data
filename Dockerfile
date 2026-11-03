@@ -10,7 +10,10 @@ COPY server.js ./
 COPY config ./config
 COPY src ./src
 COPY public ./public
-COPY data ./data
+
+# data/ 已在 .dockerignore 中排除（本地导出数据不入镜像，数据以云数据库为准）
+# 这里只预建运行时目录，避免程序写缓存/导入时报目录不存在
+RUN mkdir -p /app/data/imports /app/data/cache
 
 # 云托管会注入 PORT 环境变量；默认 80 便于本地测试
 ENV PORT=80
