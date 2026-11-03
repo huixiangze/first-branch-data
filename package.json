@@ -1,0 +1,13 @@
+{
+  "name": "first-branch-data-platform",
+  "version": "1.0.0",
+  "description": "第一分公司数据中台（云台挂载 / 登录门禁 / WPS共享表格取数 / 20分钟自动刷新）",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}
