@@ -575,7 +575,7 @@
 
   // ---------- 数据 ----------
   function fetchData(force) {
-    return fetch('/api/data').then(function (r) {
+    return fetch('/api/data?_t=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' }).then(function (r) {
       if (r.status === 401) { location.reload(); return null; }
       return r.json();
     }).then(function (d) {
@@ -653,7 +653,7 @@
     attachContentHandlers();
     setInterval(tickClock, 1000); tickClock();
 
-    fetch('/api/me').then(function (r) { return r.json(); }).then(function (j) {
+    fetch('/api/me?_t=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
       if (j.user) enterApp(j.user);
     }).catch(function () {});
   }
