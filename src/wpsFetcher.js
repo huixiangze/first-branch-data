@@ -83,9 +83,11 @@ async function getAccessToken(globalCfg) {
   if (!appId || !appKey) return null;
   const apiBase = globalCfg.apiBase || 'https://openapi.wps.cn';
   const tokenUrl = (globalCfg.tokenUrl || apiBase + '/oauth2/token');
-  const postBody = 'grant_type=client_credentials&client_id=' + encodeURIComponent(appId) + '&client_secret=' + encodeURIComponent(appKey);
+  const scope = globalCfg.scope || 'kso.file_link.readwrite kso.sheets.read kso.file.read';
+  const postBody = 'grant_type=client_credentials&client_id=' + encodeURIComponent(appId) + '&client_secret=' + encodeURIComponent(appKey) + '&scope=' + encodeURIComponent(scope);
   const res = await httpRequest('POST', tokenUrl, {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: postBody
   });
   // 兼容 POST 表单与上送 JSON 两种；部分环境要求 JSON
   let json = res.json;
@@ -136,14 +138,27 @@ async function getWorksheets(fileId, token, globalCfg) {
 async function readRange(fileId, sheetId, token, globalCfg, rowTo, colTo) {
   rowTo = rowTo || 2000; colTo = colTo || 80;
   const apiBase = globalCfg.apiBase || 'https://openapi.wps.cn';
-  const q = 'row_from=0&row_to=' + rowTo + '&col_from=0&col_to=' + colTo;
-  const res = await httpRequest('GET', apiBase + '/v7/sheets/' + encodeURIComponent(fileId) +
-    '/worksheets/' + encodeURIComponent(sheetId) + '/range_data?' + q, {
-    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' }
+  const base = apiBase + '/v7/sheets/' + encodeURIComponent(fileId) + '/worksheets/' + encodeURIComponent(sheetId);
+  // 方法一：GET range_data（按矩形区域读，传统表格 et）
+  try {
+    const q = 'row_from=0&row_to=' + rowTo + '&col_from=0&col_to=' + colTo;
+    const res = await httpRequest('GET', base + '/range_data?' + q, {
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' }
+    });
+    const j = res.json;
+    if (j && j.code === 0 && j.data) return j.data;
+  } catch (e) { /* 落到方法二 */ }
+  // 方法二：POST range_data/find（官方文档推荐的读单元格方式）
+  const res2 = await httpRequest('POST', base + '/range_data/find', {
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      range: { row_from: 0, row_to: rowTo, col_from: 0, col_to: colTo },
+      filter: { condition: [], search: [], duplicates: { col: [] } }
+    })
   });
-  const j = res.json;
-  if (!j || j.code !== 0) throw new Error('读取单元格失败：' + (j && j.msg || JSON.stringify(j).slice(0, 200)));
-  return j.data;
+  const j2 = res2.json;
+  if (!j2 || j2.code !== 0) throw new Error('读取单元格失败：' + (j2 && j2.msg || JSON.stringify(j2).slice(0, 200)));
+  return j2.data;
 }
 
 // ---------------------------------------------------------------------------
@@ -376,28 +391,22 @@ function parseCsv(text) {
   return rows;
 }
 
-function csvToRows(modCfg) {
+function csvToRaw(modCfg) {
   const file = path.join(IMPORT_DIR, modCfg.csv || (modCfg.label + '.csv'));
   if (!fs.existsSync(file)) {
-    console.warn('[csv] 文件不存在，回退示例数据: ' + file);
     return null;
   }
-  const text = fs.readFileSync(file, 'utf8');
-  const rows = parseCsv(text);
-  if (rows.length < 2) return [];
-  const headers = rows[0].map(function (h) { return h.trim(); });
-  const fm = modCfg.wps ? modCfg.wps.fieldMap || {} : {};
-  const out = [];
-  for (let i = 1; i < rows.length; i++) {
+  const text = fs.readFileSync(file, 'utf8').replace(/^﻿/, '');
+  const grid = parseCsv(text);
+  if (grid.length < 2) return null;
+  const headers = grid[0].map(function (h) { return h.trim(); });
+  const rows = [];
+  for (let i = 1; i < grid.length; i++) {
     const r = {};
-    headers.forEach(function (h, idx) {
-      let outKey = h;
-      Object.keys(fm).forEach(function (k) { if (fm[k] === h) outKey = k; });
-      r[outKey] = (rows[i][idx] || '').trim();
-    });
-    out.push(r);
+    headers.forEach(function (h, idx) { r[h] = (grid[i][idx] || '').trim(); });
+    rows.push(r);
   }
-  return out;
+  return { headers: headers, rows: rows };
 }
 
 // ---------------------------------------------------------------------------
@@ -405,17 +414,31 @@ function csvToRows(modCfg) {
 // ---------------------------------------------------------------------------
 async function fetchModule(key, modCfg, globalCfg) {
   const src = (modCfg.source || 'sample').toLowerCase();
+  const fallbackToSample = function () { return sample.buildAll()[key]; };
+  // 本地 CSV 导出（手动兜底：零依赖、立即可用，无需 WPS 高级版）
+  const fromCsv = function () {
+    const raw = csvToRaw(modCfg);
+    if (!raw) return null;
+    const t = transformModule(key, raw.headers, raw.rows, modCfg);
+    t.rawHeaders = raw.headers;
+    t.rawRows = raw.rows;
+    t.source = 'csv';
+    t.updated = new Date().toISOString();
+    return t;
+  };
   if (src === 'csv') {
-    const rows = csvToRows(modCfg);
-    if (rows) return { rows: rows, updated: new Date().toISOString(), source: 'csv' };
-    return sample.buildAll()[key];
+    const t = fromCsv();
+    return t || fallbackToSample();
   }
   if (src === 'wps') {
     const data = await fetchWps(key, modCfg, globalCfg);
-    if (data) return data;
-    return sample.buildAll()[key];
+    if (data) { data.source = 'wps'; return data; }
+    // WPS 读取失败（如未开通高级版能力 / 链接已关闭）-> 尝试本地 CSV 兜底
+    const t = fromCsv();
+    if (t) return t;
+    return fallbackToSample();
   }
-  return sample.buildAll()[key];
+  return fallbackToSample();
 }
 
 // 供诊断脚本使用

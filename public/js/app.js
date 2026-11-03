@@ -21,15 +21,10 @@
   // ---------- 模块定义 ----------
   var MODULES = [
     { key: 'home', label: '首页' },
+    { key: 'forecast', label: '业绩预估' },
     { key: 'anchorRank', label: '主播榜单' },
     { key: 'anchorPerformance', label: '主播业绩' },
-    { key: 'productInsight', label: '商品洞察' },
-    { key: 'productData', label: '商品数据' },
-    { key: 'productDept', label: '商品部' },
-    { key: 'rongpin', label: '融品业绩' },
-    { key: 'deputy', label: '副总业绩' },
-    { key: 'preference', label: '商品喜好' },
-    { key: 'forecast', label: '业绩预估' }
+    { key: 'rongpin', label: '预估结算' }
   ];
 
   var state = {
@@ -218,6 +213,40 @@
       (body || '<tr><td colspan="' + columns.length + '" class="empty">暂无数据</td></tr>') + '</tbody></table></div>';
   }
 
+  // ---------- 通用：真实数据全列展示（兜底，保证无论列名是否匹配都能看见数据）----------
+  function sourceLabel(src) {
+    if (src === 'wps') return '数据来源：WPS 实时（直连）';
+    if (src === 'csv') return '数据来源：WPS 导出文件（手动更新）';
+    return '数据来源：示例数据';
+  }
+  function genericTable(moduleKey, rawHeaders, rawRows, opts) {
+    opts = opts || {};
+    if (!rawHeaders || !rawHeaders.length) return '';
+    var cols = rawHeaders.map(function (h) { return { key: h, label: h }; });
+    var rows = (rawRows || []).map(function (r) {
+      var o = {}; rawHeaders.forEach(function (h) { o[h] = (r[h] == null ? '' : r[h]); }); return o;
+    });
+    return '<div class="panel"><div class="panel-head"><div class="ph-title">' + esc(opts.title || '真实数据（来自 WPS 导出）') + '</div>' +
+      '<div class="ph-sub">共 ' + rows.length + ' 行 · 点击表头排序、点击行可置顶、上方搜索可筛选</div></div>' +
+      dataTable(moduleKey + '_raw', cols, rows, { exportName: (opts.exportName || moduleKey) + '_真实' }) + '</div>';
+  }
+  // 模块内容容器：有真实原始数据优先展示真实全列表；否则展示结构化看板（示例或已命中字段映射）
+  function moduleBody(key, m, structuredHtml) {
+    var html = '';
+    if (m.kpis && m.kpis.length) html += kpiRow(m.kpis);
+    if (m.rawHeaders && m.rawHeaders.length) {
+      html += genericTable(key, m.rawHeaders, m.rawRows, { title: (m.title || '真实数据'), exportName: key });
+    } else {
+      html += structuredHtml;
+    }
+    html += uploadBtn(key);
+    return html;
+  }
+  function uploadBtn(key) {
+    return '<div style="margin-top:12px"><button class="tbtn" data-role="upload" data-mod="' + key + '">⬆ 上传该模块数据(CSV)</button>' +
+      '<span class="tcount" style="margin-left:10px">将 WPS 表格「导出为 CSV」后上传，立即生效（无需重新部署）</span></div>';
+  }
+
   // ---------- 各模块视图 ----------
   var VIEWS = {
     home: function (d) {
@@ -244,39 +273,40 @@
 
     anchorRank: function (d) {
       var m = d.anchorRank || {};
+      var html = '<div class="view-title">主播榜单</div><div class="view-sub">主播销售明细 · ' + sourceLabel(m.source) + ' · 点击表头排序、点击行可置顶</div>';
       var cols = [
         { key: 'anchor', label: '主播' }, { key: 'org', label: '所属机构' }, { key: 'category', label: '品类' },
         { key: 'gmv', label: '下播GMV累计(万)', cls: 'mono' }, { key: 'avg', label: '场均销售额(万)', cls: 'mono' },
         { key: 'target', label: '月销售目标(万)', cls: 'mono' }, { key: 'rate', label: '月目标完成度(%)', cls: 'mono' },
         { key: 'aov', label: '客单价', cls: 'mono' }, { key: 'rank', label: '完成排名', cls: 'mono' }
       ];
-      var html = '<div class="view-title">主播榜单</div><div class="view-sub">主播销售明细 · 数据来源：WPS共享表格（实时） · 点击表头排序、点击行可置顶</div>';
-      html += '<div class="panel"><div class="panel-head"><div class="ph-title">主播销售明细</div></div>';
-      html += dataTable('anchorRank', cols, m.rows || [], { exportName: '主播销售明细', month: true });
-      html += '</div>';
+      var structured = '<div class="panel"><div class="panel-head"><div class="ph-title">主播销售明细</div></div>' +
+        dataTable('anchorRank', cols, m.rows || [], { exportName: '主播销售明细', month: true }) + '</div>';
       var top5 = filterMonth((m.rows || []).slice(0, 5), 'anchorRank').map(function (r) { return { label: r.anchor, value: r.gmv, color: '#2f6fed' }; });
-      html += chartPanel('GMV Top5 主播', '', window.chartHelpers.hBars(top5, { unit: ' 万' }));
+      structured += chartPanel('GMV Top5 主播', '', window.chartHelpers.hBars(top5, { unit: ' 万' }));
+      html += moduleBody('anchorRank', m, structured);
       return html;
     },
 
     anchorPerformance: function (d) {
       var m = d.anchorPerformance || {};
-      var html = '<div class="view-title">主播业绩</div><div class="view-sub">主播业绩明细 · 数据来源：WPS共享表格（实时）</div>';
-      html += kpiRow(m.kpis);
-      html += '<div class="grid-3">';
+      var html = '<div class="view-title">主播业绩</div><div class="view-sub">主播业绩明细 · ' + sourceLabel(m.source) + '</div>';
+      var structured = '';
+      structured += '<div class="grid-3">';
       (m.categories || []).forEach(function (c) {
-        html += '<div class="panel" style="text-align:center"><div class="k-val">' + esc(c.count) + ' <span class="unit">人</span></div><div class="k-title" style="margin-top:6px">' + esc(c.name) + '</div><div style="margin-top:8px"><span class="tag ' + (c.tag || 'gray') + '">' + esc(c.amount) + '</span></div></div>';
+        structured += '<div class="panel" style="text-align:center"><div class="k-val">' + esc(c.count) + ' <span class="unit">人</span></div><div class="k-title" style="margin-top:6px">' + esc(c.name) + '</div><div style="margin-top:8px"><span class="tag ' + (c.tag || 'gray') + '">' + esc(c.amount) + '</span></div></div>';
       });
-      html += '</div>';
+      structured += '</div>';
       var det = m.detail || {};
       var cols = [
         { key: 'date', label: '日期' }, { key: 'anchor', label: '主播' }, { key: 'est', label: '预估(万)', cls: 'mono' },
         { key: 'actual', label: '实际(万)', cls: 'mono' }, { key: 'diff', label: '差额(万)', cls: 'mono' },
         { key: 'diffRate', label: '差额率(%)', cls: 'mono' }, { key: 'status', label: '状态', tag: 'status' }, { key: 'tag', label: '是否打标' }
       ];
-      html += '<div class="panel"><div class="panel-head"><div class="ph-title">主播业绩明细</div><div class="ph-sub">' + (det.tabs ? det.tabs.join(' / ') : '') + '</div></div>';
-      html += dataTable('anchorPerformance', cols, det.rows || [], { exportName: '主播业绩明细', month: true });
-      html += '</div>';
+      structured += '<div class="panel"><div class="panel-head"><div class="ph-title">主播业绩明细</div><div class="ph-sub">' + (det.tabs ? det.tabs.join(' / ') : '') + '</div></div>';
+      structured += dataTable('anchorPerformance', cols, det.rows || [], { exportName: '主播业绩明细', month: true });
+      structured += '</div>';
+      html += moduleBody('anchorPerformance', m, structured);
       return html;
     },
 
@@ -335,17 +365,18 @@
 
     rongpin: function (d) {
       var m = d.rongpin || {};
-      var html = '<div class="view-title">融品业绩</div><div class="view-sub">主播业绩分成计划 · 数据来源：WPS共享表格（实时） · ' + esc(m.updated || '-') + '</div>';
-      html += kpiRow(m.kpis);
-      html += '<div class="grid-2b">';
-      html += chartPanel('融品预估结算GMV对比(万)', '', window.chartHelpers.vBars(filterMonth(m.settlement || [], 'rongpin'), { unit: ' 万' }));
-      html += chartPanel('融品月目标完成度(%)', '', window.chartHelpers.vBars(filterMonth(m.completion || [], 'rongpin'), { unit: '%' }));
-      html += '</div>';
+      var html = '<div class="view-title">预估结算</div><div class="view-sub">预估结算明细（日更） · ' + sourceLabel(m.source) + ' · ' + esc(m.updated || '-') + '</div>';
+      var structured = '';
+      structured += '<div class="grid-2b">';
+      structured += chartPanel('融品预估结算GMV对比(万)', '', window.chartHelpers.vBars(filterMonth(m.settlement || [], 'rongpin'), { unit: ' 万' }));
+      structured += chartPanel('融品月目标完成度(%)', '', window.chartHelpers.vBars(filterMonth(m.completion || [], 'rongpin'), { unit: '%' }));
+      structured += '</div>';
       var dcols = [
         { key: 'anchor', label: '主播昵称' }, { key: 'gmv', label: '直播间GMV(万)', cls: 'mono' },
         { key: 'commission', label: '预估佣金(万)', cls: 'mono' }, { key: 'dept', label: '部门' }, { key: 'growth', label: '环比增长(%)', cls: 'mono' }
       ];
-      html += '<div class="panel"><div class="panel-head"><div class="ph-title">分销播报（按商品）</div></div>' + dataTable('rongpin_dist', dcols, m.distribution || [], { exportName: '分销播报' }) + '</div>';
+      structured += '<div class="panel"><div class="panel-head"><div class="ph-title">分销播报（按商品）</div></div>' + dataTable('rongpin_dist', dcols, m.distribution || [], { exportName: '分销播报' }) + '</div>';
+      html += moduleBody('rongpin', m, structured);
       return html;
     },
 
@@ -378,19 +409,20 @@
 
     forecast: function (d) {
       var m = d.forecast || {};
-      var html = '<div class="view-title">业绩预估</div><div class="view-sub">月度业绩预估与置信度 · 数据来源：WPS共享表格（实时） · ' + esc(m.updated || '-') + '</div>';
+      var html = '<div class="view-title">业绩预估</div><div class="view-sub">月度业绩预估与置信度 · ' + sourceLabel(m.source) + ' · ' + esc(m.updated || '-') + '</div>';
       var s = m.summary || {};
-      html += kpiRow([
+      var structured = kpiRow([
         { title: '预估业绩', value: s.est != null ? s.est : '-', unit: '万', sub: '目标口径', trend: 'flat' },
         { title: '实际完成', value: s.actual != null ? s.actual : '-', unit: '万', sub: '已发生', trend: 'up' },
         { title: '预估置信度', value: s.confidence != null ? s.confidence : '-', unit: '%', sub: '模型置信', trend: 'flat' }
       ]);
-      html += chartPanel('月度业绩预估(万)', '', window.chartHelpers.vBars(filterMonth(m.months || [], 'forecast'), { unit: ' 万' }));
+      structured += chartPanel('月度业绩预估(万)', '', window.chartHelpers.vBars(filterMonth(m.months || [], 'forecast'), { unit: ' 万' }));
       var fcols = [
         { key: 'month', label: '月份' }, { key: 'est', label: '预估(万)', cls: 'mono' },
         { key: 'actual', label: '实际(万)', cls: 'mono' }, { key: 'confidence', label: '置信度(%)', cls: 'mono' }
       ];
-      html += '<div class="panel"><div class="panel-head"><div class="ph-title">预估明细</div></div>' + dataTable('forecast_tbl', fcols, filterMonth(m.months || [], 'forecast'), { exportName: '业绩预估明细', month: true }) + '</div>';
+      structured += '<div class="panel"><div class="panel-head"><div class="ph-title">预估明细</div></div>' + dataTable('forecast_tbl', fcols, filterMonth(m.months || [], 'forecast'), { exportName: '业绩预估明细', month: true }) + '</div>';
+      html += moduleBody('forecast', m, structured);
       return html;
     }
   };
@@ -458,6 +490,7 @@
         if (role === 'export') { handleExport(el.getAttribute('data-mod')); return; }
         if (role === 'unpin') { state.pin[el.getAttribute('data-mod')] = {}; renderView(); return; }
         if (role === 'img') { handleImgExport(el); return; }
+        if (role === 'upload') { uploadCsv(el.getAttribute('data-mod')); return; }
       }
       // 表头排序
       var th = e.target.closest ? e.target.closest('th.sortable') : null;
@@ -511,6 +544,28 @@
     if (!svg) { alert('未找到图表'); return; }
     var title = panel.querySelector('.ph-title');
     exportSVGToPNG(svg, (title ? title.textContent : 'chart') + '.png');
+  }
+  function uploadCsv(key) {
+    var inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = '.csv,text/csv,.xlsx';
+    inp.onchange = function () {
+      var f = inp.files && inp.files[0]; if (!f) return;
+      var r = new FileReader();
+      r.onload = function () {
+        var content = String(r.result);
+        // 仅允许 CSV 文本（xlsx 需先另存为 CSV）
+        if (f.name.toLowerCase().indexOf('.xlsx') >= 0) { alert('请先在 WPS 中将表格「导出为 CSV」再上传，xlsx 暂不支持直接上传'); return; }
+        fetch('/api/upload-csv', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ module: key, content: content })
+        }).then(function (x) { return x.json(); }).then(function (j) {
+          if (j.ok) { alert('上传成功，数据已刷新'); fetchData(true); }
+          else { alert(j.error || '上传失败'); }
+        }).catch(function () { alert('网络错误'); });
+      };
+      r.readAsText(f, 'utf-8');
+    };
+    inp.click();
   }
 
   // ---------- 数据 ----------

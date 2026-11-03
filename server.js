@@ -103,7 +103,7 @@ function serveStatic(req, res, urlPath) {
 function readBody(req) {
   return new Promise(function (resolve) {
     let body = '';
-    req.on('data', function (c) { body += c; if (body.length > 1e6) req.destroy(); });
+    req.on('data', function (c) { body += c; if (body.length > 20 * 1024 * 1024) req.destroy(); });
     req.on('end', function () { try { resolve(body ? JSON.parse(body) : {}); } catch (e) { resolve({}); } });
   });
 }
@@ -182,6 +182,31 @@ async function handleApi(req, res, pathname) {
     if (!username) { sendJson(res, 401, { ok: false, error: '未登录' }); return; }
     const data = await store.refreshAll();
     sendJson(res, 200, { ok: true, updatedAt: data.updatedAt });
+    return;
+  }
+
+  // 上传 CSV（登录后）：将导出的 WPS 表格写入 data/imports/<module>.csv 并刷新
+  if (pathname === '/api/upload-csv' && req.method === 'POST') {
+    const username = getSessionUser(req);
+    if (!username) { sendJson(res, 401, { ok: false, error: '未登录' }); return; }
+    const b = await readBody(req);
+    const moduleKey = String(b.module || '').trim();
+    const cfg = store.loadWpsConfig();
+    if (!moduleKey || !cfg.modules || !cfg.modules[moduleKey]) {
+      sendJson(res, 400, { ok: false, error: '未知模块' }); return;
+    }
+    const content = String(b.content || '');
+    if (!content.trim()) { sendJson(res, 400, { ok: false, error: '内容为空' }); return; }
+    const importsDir = path.join(ROOT, 'data', 'imports');
+    fs.mkdirSync(importsDir, { recursive: true });
+    const safeName = moduleKey.replace(/[^A-Za-z0-9_-]/g, '') + '.csv';
+    try {
+      fs.writeFileSync(path.join(importsDir, safeName), '﻿' + content, 'utf8');
+      const data = await store.refreshAll();
+      sendJson(res, 200, { ok: true, file: safeName, updatedAt: data.updatedAt });
+    } catch (e) {
+      sendJson(res, 500, { ok: false, error: '写入失败：' + e.message });
+    }
     return;
   }
 

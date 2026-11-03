@@ -2,11 +2,12 @@
   "_说明": "各模块数据源配置。source 可选：sample(示例数据) / wps(金山文档共享表格·经WPS开放平台v7 API读取) / csv(本地导出文件)。WPS 直连需在 wpsGlobal 填入 appId+appKey（或 accessToken）。已配 wps.url 的模块走真实数据，其余保留 sample 直到补充链接。",
   "refreshMinutes": 20,
   "wpsGlobal": {
-    "appId": "",
-    "appKey": "",
+    "appId": "AK20261103KRADPZ",
+    "appKey": "4b50c874791e54995dcfd0204932130f",
     "accessToken": "",
     "apiBase": "https://openapi.wps.cn",
-    "tokenUrl": "https://openapi.wps.cn/oauth2/token"
+    "tokenUrl": "https://openapi.wps.cn/oauth2/token",
+    "scope": "kso.file_link.readwrite kso.sheets.read"
   },
   "modules": {
     "home": {
@@ -16,7 +17,7 @@
       "csv": "home.csv"
     },
     "anchorRank": {
-      "source": "wps",
+      "source": "csv",
       "label": "主播榜单",
       "wps": {
         "url": "https://www.kdocs.cn/l/ccKD5XSnpXm0",
@@ -76,7 +77,7 @@
       "csv": "preference.csv"
     },
     "forecast": {
-      "source": "wps",
+      "source": "csv",
       "label": "业绩预估",
       "wps": {
         "url": "https://www.kdocs.cn/l/cpiiUJCyssoS",
