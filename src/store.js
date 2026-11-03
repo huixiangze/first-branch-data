@@ -46,7 +46,8 @@ async function refreshAll() {
     }
   }
   const out = { updatedAt: new Date().toISOString(), modules: modules };
-  writeCache(out);
+  try { writeCache(out); }
+  catch (e) { console.error('[refresh] 缓存写入失败（不影响运行）：' + e.message); }
   console.log('[refresh] 数据已刷新，更新时间 ' + out.updatedAt);
   return out;
 }

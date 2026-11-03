@@ -35,18 +35,22 @@ function buildHome() {
 
 function buildAnchorRank() {
   const rows = [
-    ['林多多', '潮客星创', '杨梅', 291.6, 187.6, 200.0, 4.2, 26.9, 20],
-    ['林二少', '潮客星创', '杨梅', 219.1, 166.6, 800.0, 6.3, 30.4, 10],
-    ['马晓迪', '潮客星创', '优优', 64.6, 27.8, 1000.0, 2.1, 41.9, 19],
-    ['杨幂', '潮客星创', '大美', 54.0, 24.0, 120.0, 2.8, 44.3, 18],
-    ['孙子伦', '电客', '大溪', 20.0, 11.6, 900.0, 2.2, 29.4, 16],
-    ['亚文', '电客', '落苏树', 19.6, 16.7, 200.0, 5.3, 35.2, 14],
-    ['忆春', '电客', '汇嘉', 22.5, 10.6, 200.0, 5.0, 44.3, 13],
-    ['泰吉', '潮客星创', '优优', 22.5, 9.6, 200.0, 3.2, 42.9, 15],
-    ['灵山', '潮客星创', '灵山', 19.4, 7.7, 90.0, 1.3, 69.2, 17],
-    ['苏晨', '电客', '大溪', 6.6, 2.4, 150.0, 1.7, 35.1, 12]
+    ['林多多', '潮客星创', '杨梅', 291.6, 187.6, 200.0, 4.2, 26.9, 20, '11月'],
+    ['林二少', '潮客星创', '杨梅', 219.1, 166.6, 800.0, 6.3, 30.4, 10, '11月'],
+    ['马晓迪', '潮客星创', '优优', 64.6, 27.8, 1000.0, 2.1, 41.9, 19, '11月'],
+    ['杨幂', '潮客星创', '大美', 54.0, 24.0, 120.0, 2.8, 44.3, 18, '11月'],
+    ['孙子伦', '电客', '大溪', 20.0, 11.6, 900.0, 2.2, 29.4, 16, '11月'],
+    ['亚文', '电客', '落苏树', 19.6, 16.7, 200.0, 5.3, 35.2, 14, '11月'],
+    ['忆春', '电客', '汇嘉', 22.5, 10.6, 200.0, 5.0, 44.3, 13, '11月'],
+    ['泰吉', '潮客星创', '优优', 22.5, 9.6, 200.0, 3.2, 42.9, 15, '11月'],
+    ['灵山', '潮客星创', '灵山', 19.4, 7.7, 90.0, 1.3, 69.2, 17, '11月'],
+    ['苏晨', '电客', '大溪', 6.6, 2.4, 150.0, 1.7, 35.1, 12, '11月'],
+    // 10月数据（用于月份筛选演示）
+    ['陈九月', '潮客星创', '杨梅', 260.2, 150.1, 200.0, 3.8, 24.1, 8, '10月'],
+    ['何欣月', '电客', '大溪', 88.4, 40.2, 800.0, 5.1, 33.6, 11, '10月'],
+    ['范晓', '电客', '汇嘉', 33.7, 18.9, 200.0, 4.2, 29.8, 9, '10月']
   ].map(function (r) {
-    return { anchor: r[0], org: r[1], category: r[2], gmv: r[3], avg: r[4], target: r[5], rate: r[6], aov: r[7], rank: r[8] };
+    return { anchor: r[0], org: r[1], category: r[2], gmv: r[3], avg: r[4], target: r[5], rate: r[6], aov: r[7], rank: r[8], month: r[9] };
   });
   return { rows: rows, updated: '11月', source: 'sample' };
 }
@@ -62,7 +66,7 @@ function buildAnchorPerformance() {
     ['11月3日', '范晓', 0.74, 4.9, -0.1, -2.0, '未达标', '否'],
     ['11月3日', '天下无双', 0.68, 4.1, 0.3, 7.3, '已完成', '是']
   ].map(function (r) {
-    return { date: r[0], anchor: r[1], est: r[2], actual: r[3], diff: r[4], diffRate: r[5], status: r[6], tag: r[7] };
+    return { date: r[0], anchor: r[1], est: r[2], actual: r[3], diff: r[4], diffRate: r[5], status: r[6], tag: r[7], month: '11月' };
   });
   return {
     kpis: [
@@ -90,7 +94,7 @@ function buildProductInsight() {
     ['汾酒 青花30 复兴版', '酒类', 7999.0, 1, 3999.0, 1, 1999.0, 71.4],
     ['剑南春 水晶剑 52度', '酒类', 3938.0, 1, 3938.0, 1, 3938.0, 68.8]
   ].map(function (r) {
-    return { name: r[0], category: r[1], price: r[2], sales: r[3], amount: r[4], momVol: r[5], momAmt: r[6], trend: r[7] };
+    return { name: r[0], category: r[1], price: r[2], sales: r[3], amount: r[4], momVol: r[5], momAmt: r[6], trend: r[7], month: '11月' };
   });
   const attention2 = [
     ['【微醺晚安酒】', '椰子', 999.0, 9, 8991.0, 2, 1998.0, 77.8],
@@ -100,7 +104,7 @@ function buildProductInsight() {
     ['【白啤】', '啤酒', 399.0, 3, 1197.0, 0, 0.0, 73.3],
     ['【果酒】', '果酒', 1299.0, 3, 3897.0, 0, 0.0, 71.4]
   ].map(function (r) {
-    return { name: r[0], category: r[1], price: r[2], sales: r[3], amount: r[4], momVol: r[5], momAmt: r[6], trend: r[7] };
+    return { name: r[0], category: r[1], price: r[2], sales: r[3], amount: r[4], momVol: r[5], momAmt: r[6], trend: r[7], month: '11月' };
   });
   return {
     topProducts: [
@@ -121,22 +125,26 @@ function buildProductData() {
       { title: '爆品数', value: '43', unit: '个', sub: '增速 >50%', trend: 'up' }
     ],
     categoryRank: [
-      { name: '户外出照明', value: 90 }, { name: '汽车用品', value: 82 }, { name: '家用电器', value: 75 },
-      { name: '数码配件', value: 68 }, { name: '家居生活', value: 60 }, { name: '食品饮料', value: 55 }
+      { name: '户外出照明', value: 90, month: '11月' }, { name: '汽车用品', value: 82, month: '11月' }, { name: '家用电器', value: 75, month: '11月' },
+      { name: '数码配件', value: 68, month: '11月' }, { name: '家居生活', value: 60, month: '11月' }, { name: '食品饮料', value: 55, month: '11月' },
+      { name: '户外照明', value: 71, month: '10月' }, { name: '汽车用品', value: 64, month: '10月' }, { name: '家用电器', value: 58, month: '10月' }
     ],
     topGmv: [
-      { name: '户外出照明', value: 1044.8 }, { name: '汽车用品', value: 908.4 }, { name: '家用电器', value: 821.0 },
-      { name: '数码配件', value: 763.2 }, { name: '家居生活', value: 690.5 }
+      { name: '户外出照明', value: 1044.8, month: '11月' }, { name: '汽车用品', value: 908.4, month: '11月' }, { name: '家用电器', value: 821.0, month: '11月' },
+      { name: '数码配件', value: 763.2, month: '11月' }, { name: '家居生活', value: 690.5, month: '11月' },
+      { name: '户外照明', value: 802.6, month: '10月' }, { name: '汽车用品', value: 712.0, month: '10月' }
     ],
     hot: [
-      { name: '户外出照明', change: 13.4, revenue: '1044.8万' },
-      { name: '数码配件', change: 21.1, revenue: '763.2万' },
-      { name: '家用电器', change: 9.8, revenue: '821.0万' }
+      { name: '户外出照明', change: 13.4, revenue: '1044.8万', month: '11月' },
+      { name: '数码配件', change: 21.1, revenue: '763.2万', month: '11月' },
+      { name: '家用电器', change: 9.8, revenue: '821.0万', month: '11月' },
+      { name: '户外照明', change: 11.2, revenue: '802.6万', month: '10月' }
     ],
     rising: [
-      { name: '珠宝/玉石', change: 88.2, revenue: '312.6万' },
-      { name: '手表', change: 87.5, revenue: '288.1万' },
-      { name: '箱包', change: 76.3, revenue: '254.0万' }
+      { name: '珠宝/玉石', change: 88.2, revenue: '312.6万', month: '11月' },
+      { name: '手表', change: 87.5, revenue: '288.1万', month: '11月' },
+      { name: '箱包', change: 76.3, revenue: '254.0万', month: '11月' },
+      { name: '翡翠', change: 65.4, revenue: '198.2万', month: '10月' }
     ],
     updated: '2026-11-03 13:06:18'
   };
@@ -152,12 +160,13 @@ function buildProductDept() {
       { title: '潜力品数', value: '281', unit: '条', sub: '占 6.1%', trend: 'up' }
     ],
     yieldByCategory: [
-      { category: '酒类', yield: 52 }, { category: '面点', yield: 51 }, { category: '生鲜冻品', yield: 50 },
-      { category: '咖啡', yield: 49 }, { category: '茶饮', yield: 48 }, { category: '乳品', yield: 47 },
-      { category: '粮油', yield: 46 }, { category: '烘焙', yield: 45 }, { category: '调味品', yield: 48 },
-      { category: '休闲零食', yield: 44 }, { category: '母婴', yield: 43 }, { category: '纸品', yield: 43 },
-      { category: '日化', yield: 42 }, { category: '家纺', yield: 42 }, { category: '服饰', yield: 42 },
-      { category: '其它', yield: 42 }
+      { category: '酒类', yield: 52, month: '11月' }, { category: '面点', yield: 51, month: '11月' }, { category: '生鲜冻品', yield: 50, month: '11月' },
+      { category: '咖啡', yield: 49, month: '11月' }, { category: '茶饮', yield: 48, month: '11月' }, { category: '乳品', yield: 47, month: '11月' },
+      { category: '粮油', yield: 46, month: '11月' }, { category: '烘焙', yield: 45, month: '11月' }, { category: '调味品', yield: 48, month: '11月' },
+      { category: '休闲零食', yield: 44, month: '11月' }, { category: '母婴', yield: 43, month: '11月' }, { category: '纸品', yield: 43, month: '11月' },
+      { category: '日化', yield: 42, month: '11月' }, { category: '家纺', yield: 42, month: '11月' }, { category: '服饰', yield: 42, month: '11月' },
+      { category: '其它', yield: 42, month: '11月' },
+      { category: '酒类', yield: 49, month: '10月' }, { category: '面点', yield: 47, month: '10月' }, { category: '生鲜冻品', yield: 45, month: '10月' }
     ],
     pools: {
       priority: [
@@ -234,12 +243,14 @@ function buildDeputy() {
 function buildPreference() {
   return {
     byCategory: [
-      { category: '酒类', likes: 92, buyers: 1840 },
-      { category: '休闲零食', likes: 85, buyers: 1620 },
-      { category: '茶饮', likes: 78, buyers: 1450 },
-      { category: '美妆护肤', likes: 71, buyers: 1230 },
-      { category: '家居生活', likes: 64, buyers: 980 },
-      { category: '数码配件', likes: 58, buyers: 860 }
+      { category: '酒类', likes: 92, buyers: 1840, month: '11月' },
+      { category: '休闲零食', likes: 85, buyers: 1620, month: '11月' },
+      { category: '茶饮', likes: 78, buyers: 1450, month: '11月' },
+      { category: '美妆护肤', likes: 71, buyers: 1230, month: '11月' },
+      { category: '家居生活', likes: 64, buyers: 980, month: '11月' },
+      { category: '数码配件', likes: 58, buyers: 860, month: '11月' },
+      { category: '酒类', likes: 74, buyers: 1420, month: '10月' },
+      { category: '休闲零食', likes: 66, buyers: 1180, month: '10月' }
     ],
     top: [
       { name: '茅台 1935', likes: 1240 }, { name: '五粮液 第八代', likes: 980 }, { name: '三只松鼠大礼包', likes: 870 },

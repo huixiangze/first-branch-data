@@ -153,3 +153,29 @@ svg.chart { width: 100%; height: auto; display: block; }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
 .empty { color: var(--muted); padding: 30px; text-align: center; }
 .loading { padding: 40px; text-align: center; color: var(--muted); }
+
+/* 表格工具条（导出/导入/月份/搜索/排序/置顶） */
+.tbl-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.tbtn { border: 1px solid var(--line); background: #fff; color: #45506a; padding: 7px 14px; border-radius: 8px; font-size: 13px; cursor: pointer; transition: .15s; }
+.tbtn:hover { border-color: var(--primary); color: var(--primary); }
+.tbtn.primary { background: linear-gradient(135deg, #2f6fed, #1f4fb8); color: #fff; border: none; }
+.tbtn.primary:hover { opacity: .92; }
+.tbtn.ghost { background: #f1f4f9; color: #6b7fa6; }
+.tlabel { font-size: 13px; color: var(--muted); }
+.tselect { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 13px; color: var(--text); background: #fafbfc; }
+.tinput { border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; font-size: 13px; width: 200px; background: #fafbfc; outline: none; }
+.tinput:focus { border-color: var(--primary); background: #fff; }
+.tcount { font-size: 12px; color: var(--muted); margin-left: auto; }
+.tbl-wrap { overflow-x: auto; }
+
+/* 表头排序 / 行置顶 */
+table.tbl th.sortable { cursor: pointer; user-select: none; }
+table.tbl th.sortable:hover { color: var(--primary); background: #eef3ff; }
+table.tbl tr.drow { cursor: pointer; }
+table.tbl tr.drow.pinned td { background: #fff7e6; }
+table.tbl tr.drow.pinned td:first-child { box-shadow: inset 3px 0 0 var(--orange); }
+
+/* 图表面板右上「图片」按钮 */
+.chart-panel .panel-head { position: relative; }
+.chart-panel .ph-tools { display: flex; gap: 8px; }
+.chart-panel .ph-tools .tbtn { padding: 4px 10px; font-size: 12px; }
