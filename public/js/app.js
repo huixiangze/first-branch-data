@@ -215,6 +215,7 @@
 
   // ---------- 通用：真实数据全列展示（兜底，保证无论列名是否匹配都能看见数据）----------
   function sourceLabel(src) {
+    if (src === 'cloud') return '数据来源：云数据库（实时同步）';
     if (src === 'wps') return '数据来源：WPS 实时（直连）';
     if (src === 'csv') return '数据来源：WPS 导出文件（手动更新）';
     return '数据来源：示例数据';
@@ -559,7 +560,11 @@
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ module: key, content: content })
         }).then(function (x) { return x.json(); }).then(function (j) {
-          if (j.ok) { alert('上传成功，数据已刷新'); fetchData(true); }
+          if (j.ok) {
+            if (j.cloud === false) { alert('本地已更新，但写入云库失败：' + (j.cloudError || '未知错误')); }
+            else { alert('已写入云库（' + (j.rows || 0) + ' 行），全站实时可见'); }
+            fetchData(true);
+          }
           else { alert(j.error || '上传失败'); }
         }).catch(function () { alert('网络错误'); });
       };

@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const fetcher = require('./wpsFetcher');
+const cloudDb = require('./cloudDb');
 
 const ROOT = path.join(__dirname, '..');
 const CACHE_DIR = path.join(ROOT, 'data', 'cache');
@@ -56,9 +57,37 @@ function getModules() {
   return readCache() || { updatedAt: null, modules: {} };
 }
 
+function laterOf(a, b) {
+  const ta = a ? new Date(a).getTime() : 0;
+  const tb = b ? new Date(b).getTime() : 0;
+  if (!ta && !tb) return null;
+  return new Date(Math.max(ta, tb)).toISOString();
+}
+
+// 云库优先、本地缓存兜底：云库存在的模块覆盖本地同名模块
+async function getModulesMerged() {
+  const local = readCache() || { updatedAt: null, modules: {} };
+  let cloud = { modules: {}, updatedAt: null };
+  if (cloudDb.isEnabled()) {
+    try {
+      cloud = await cloudDb.listModules();
+    } catch (e) {
+      console.error('[cloud] 读取云库失败，回退本地缓存：' + e.message);
+    }
+  }
+  const modules = Object.assign({}, local.modules || {}, cloud.modules || {});
+  delete modules.__probe__;
+  return {
+    updatedAt: laterOf(local.updatedAt, cloud.updatedAt),
+    modules: modules,
+    cloudModules: Object.keys(cloud.modules || {})
+  };
+}
+
 module.exports = {
   refreshAll: refreshAll,
   getModules: getModules,
+  getModulesMerged: getModulesMerged,
   readCache: readCache,
   writeCache: writeCache,
   loadWpsConfig: loadWpsConfig,

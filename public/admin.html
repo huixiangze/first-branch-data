@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>数据后台 · 云库管理</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f4f6fb; color: #1f2a44; }
+    .top { background: #1b2a4a; color: #fff; padding: 14px 22px; display: flex; align-items: center; justify-content: space-between; }
+    .top .t { font-size: 16px; font-weight: 600; }
+    .top .s { font-size: 12px; opacity: .7; margin-left: 10px; }
+    .top a { color: #cfe0ff; text-decoration: none; font-size: 13px; margin-left: 16px; }
+    .wrap { max-width: 1080px; margin: 22px auto; padding: 0 18px 60px; }
+    .banner { background: #fff; border: 1px solid #e6ebf5; border-radius: 12px; padding: 16px 18px; margin-bottom: 18px; }
+    .banner .h { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+    .banner .m { font-size: 13px; color: #66738c; line-height: 1.7; }
+    .banner .m b { color: #2f6fed; }
+    .panel { background: #fff; border: 1px solid #e6ebf5; border-radius: 12px; overflow: hidden; }
+    .panel-h { padding: 14px 18px; border-bottom: 1px solid #eef2f9; font-weight: 600; font-size: 14px; display: flex; justify-content: space-between; align-items: center; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 12px 16px; font-size: 13px; border-bottom: 1px solid #f0f3f9; vertical-align: middle; }
+    th { color: #7a869e; font-weight: 500; background: #fafbfe; }
+    tr:last-child td { border-bottom: none; }
+    .tag { display: inline-block; padding: 2px 9px; border-radius: 20px; font-size: 12px; }
+    .tag.on { background: #e6f7ee; color: #1f9d5b; }
+    .tag.off { background: #eef1f6; color: #7a869e; }
+    .btn { border: none; border-radius: 8px; padding: 7px 13px; font-size: 13px; cursor: pointer; margin-right: 6px; }
+    .btn.primary { background: #2f6fed; color: #fff; }
+    .btn.ghost { background: #f1f4fa; color: #445; }
+    .btn.ghost:hover { background: #e6ebf5; }
+    .btn:disabled { opacity: .5; cursor: default; }
+    .muted { color: #9aa5bb; font-size: 12px; }
+    .toast { position: fixed; right: 20px; bottom: 20px; background: #1f9d5b; color: #fff; padding: 12px 18px; border-radius: 10px; font-size: 13px; box-shadow: 0 8px 24px rgba(0,0,0,.15); opacity: 0; transform: translateY(10px); transition: all .25s; pointer-events: none; max-width: 420px; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.err { background: #d64545; }
+    .empty { padding: 26px; text-align: center; color: #9aa5bb; }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <div><span class="t">第一分公司数据云台 · 数据后台</span><span class="s">云数据库管理</span></div>
+    <div><a href="/">← 返回数据大屏</a><a href="#" id="logout">退出</a></div>
+  </div>
+  <div class="wrap">
+    <div class="banner">
+      <div class="h">数据已迁移到云数据库</div>
+      <div class="m">
+        在这里给任意模块「导入 CSV」或「重置」，保存后<b>全站所有用户立即看到新数据，无需重新部署</b>。<br/>
+        数据存放在腾讯云托管的 PostgreSQL（WorkBuddy 云服务），不再依赖金山文档/WPS 授权。
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-h"><span>模块数据管理</span><span class="muted" id="cloudState">云库状态：检测中…</span></div>
+      <table>
+        <thead><tr><th style="width:190px">模块</th><th>云库状态</th><th>行数</th><th>最近更新</th><th style="width:260px">操作</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <script>
+  (function () {
+    var MODULES = [
+      { key: 'anchorRank', label: '主播榜单' },
+      { key: 'forecast', label: '业绩预估' },
+      { key: 'anchorPerformance', label: '主播业绩' },
+      { key: 'rongpin', label: '预估结算' },
+      { key: 'productInsight', label: '商品洞察' },
+      { key: 'productData', label: '商品数据' },
+      { key: 'productDept', label: '商品部' },
+      { key: 'deputy', label: '副总业绩' },
+      { key: 'preference', label: '商品喜好' }
+    ];
+    var cloudMap = {};      // module -> {rows, updatedAt}
+    var toastTimer = null;
+
+    function $(id) { return document.getElementById(id); }
+    function toast(msg, isErr) {
+      var t = $('toast');
+      t.textContent = msg;
+      t.className = 'toast show' + (isErr ? ' err' : '');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(function () { t.className = 'toast'; }, 3200);
+    }
+    function fmtTime(iso) {
+      if (!iso) return '-';
+      try { return new Date(iso).toLocaleString('zh-CN'); } catch (e) { return iso; }
+    }
+
+    function render() {
+      var html = MODULES.map(function (m) {
+        var c = cloudMap[m.key];
+        var on = !!c;
+        return '<tr data-mod="' + m.key + '">' +
+          '<td><b>' + m.label + '</b><div class="muted">' + m.key + '</div></td>' +
+          '<td>' + (on ? '<span class="tag on">已上云</span>' : '<span class="tag off">未上云（用本地）</span>') + '</td>' +
+          '<td>' + (on ? c.rows : '-') + '</td>' +
+          '<td>' + (on ? fmtTime(c.updatedAt) : '-') + '</td>' +
+          '<td>' +
+            '<button class="btn primary" data-act="import" data-mod="' + m.key + '">导入CSV</button>' +
+            (on ? '<button class="btn ghost" data-act="reset" data-mod="' + m.key + '">重置</button>' : '') +
+          '</td></tr>';
+      }).join('');
+      $('rows').innerHTML = html;
+    }
+
+    function loadCloud() {
+      return fetch('/api/cloud/modules').then(function (r) {
+        if (r.status === 401) { location.href = '/'; return null; }
+        return r.json();
+      }).then(function (j) {
+        if (!j) return;
+        if (!j.ok) { $('cloudState').textContent = '云库状态：异常 ' + (j.error || ''); toast(j.error || '读取失败', true); return; }
+        if (!j.enabled) { $('cloudState').textContent = '云库状态：未启用（config/cloud.json）'; toast('云数据库未启用', true); return; }
+        cloudMap = {};
+        (j.modules || []).forEach(function (m) { cloudMap[m.module] = { rows: m.rows, updatedAt: j.updatedAt }; });
+        $('cloudState').textContent = '云库状态：正常 · 已上云 ' + (j.modules || []).length + ' 个模块 · 更新于 ' + fmtTime(j.updatedAt);
+        render();
+      }).catch(function () { $('cloudState').textContent = '云库状态：网络错误'; });
+    }
+
+    function importCsv(mod) {
+      var inp = document.createElement('input');
+      inp.type = 'file';
+      inp.accept = '.csv,text/csv';
+      inp.onchange = function () {
+        var f = inp.files && inp.files[0];
+        if (!f) return;
+        if (f.name.toLowerCase().slice(-5) === '.xlsx') { toast('请先在表格软件里「导出为 CSV」，xlsx 不能直接导入', true); return; }
+        var r = new FileReader();
+        r.onload = function () {
+          var content = String(r.result);
+          toast('正在写入云库…');
+          fetch('/api/upload-csv', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ module: mod, content: content })
+          }).then(function (x) { return x.json(); }).then(function (j) {
+            if (j.ok) {
+              if (j.cloud === false) { toast('本地已更新，但云库写入失败：' + (j.cloudError || ''), true); }
+              else { toast('已写入云库：' + mod + ' · ' + j.rows + ' 行，全站实时可见'); }
+              loadCloud();
+            } else { toast(j.error || '导入失败', true); }
+          }).catch(function () { toast('网络错误', true); });
+        };
+        r.readAsText(f, 'utf-8');
+      };
+      inp.click();
+    }
+
+    function reset(mod) {
+      if (!confirm('确定把「' + mod + '」从云库删除、回退到本地数据吗？\n（数据大屏该模块会变回本地 CSV/示例，可再次导入恢复）')) return;
+      fetch('/api/cloud/reset', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ module: mod })
+      }).then(function (x) { return x.json(); }).then(function (j) {
+        if (j.ok) { toast('已重置：' + mod); loadCloud(); }
+        else { toast(j.error || '重置失败', true); }
+      }).catch(function () { toast('网络错误', true); });
+    }
+
+    document.getElementById('rows').addEventListener('click', function (e) {
+      var btn = e.target.closest ? e.target.closest('button[data-act]') : null;
+      if (!btn) return;
+      var act = btn.getAttribute('data-act'), mod = btn.getAttribute('data-mod');
+      if (act === 'import') importCsv(mod);
+      else if (act === 'reset') reset(mod);
+    });
+    document.getElementById('logout').onclick = function (e) {
+      e.preventDefault();
+      fetch('/api/logout', { method: 'POST' }).then(function () { location.href = '/'; });
+    };
+
+    fetch('/api/me').then(function (r) { return r.json(); }).then(function (j) {
+      if (!j.user) { location.href = '/'; return; }
+      loadCloud();
+    }).catch(function () { location.href = '/'; });
+  })();
+  </script>
+</body>
+</html>

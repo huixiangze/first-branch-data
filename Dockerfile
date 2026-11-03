@@ -10,6 +10,7 @@ COPY server.js ./
 COPY config ./config
 COPY src ./src
 COPY public ./public
+COPY data ./data
 
 # 云托管会注入 PORT 环境变量；默认 80 便于本地测试
 ENV PORT=80

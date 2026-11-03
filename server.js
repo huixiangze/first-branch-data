@@ -10,6 +10,8 @@ const crypto = require('crypto');
 const ROOT = __dirname;
 const PUBLIC = path.join(ROOT, 'public');
 const store = require('./src/store');
+const cloudDb = require('./src/cloudDb');
+const fetcher = require('./src/wpsFetcher');
 
 const PORT = process.env.PORT || 8090;
 const users = JSON.parse(fs.readFileSync(path.join(ROOT, 'config', 'users.json'), 'utf8'));
@@ -173,7 +175,8 @@ async function handleApi(req, res, pathname) {
   if (pathname === '/api/data') {
     const username = getSessionUser(req);
     if (!username) { sendJson(res, 401, { ok: false, error: '未登录' }); return; }
-    sendJson(res, 200, store.getModules());
+    const data = await store.getModulesMerged();
+    sendJson(res, 200, data);
     return;
   }
 
@@ -202,10 +205,61 @@ async function handleApi(req, res, pathname) {
     const safeName = moduleKey.replace(/[^A-Za-z0-9_-]/g, '') + '.csv';
     try {
       fs.writeFileSync(path.join(importsDir, safeName), '﻿' + content, 'utf8');
-      const data = await store.refreshAll();
-      sendJson(res, 200, { ok: true, file: safeName, updatedAt: data.updatedAt });
+      // 用 CSV 源计算该模块 payload（不触发 WPS 网络请求）
+      const csvCfg = Object.assign({}, cfg.modules[moduleKey], { source: 'csv', csv: safeName });
+      const payload = await fetcher.fetchModule(moduleKey, csvCfg, cfg.wpsGlobal);
+      if (!payload) { sendJson(res, 400, { ok: false, error: 'CSV 解析后无有效数据' }); return; }
+      payload.source = 'cloud';
+      let cloudOk = false, cloudErr = null;
+      if (cloudDb.isEnabled()) {
+        try { await cloudDb.upsertModule(moduleKey, payload); cloudOk = true; }
+        catch (e) { cloudErr = e.message; }
+      }
+      // 同步刷新本地缓存（作为离线兜底，不阻塞响应）
+      store.refreshAll().catch(function () {});
+      const rowCount = (payload.rows && payload.rows.length) || (payload.rawRows && payload.rawRows.length) || 0;
+      sendJson(res, 200, { ok: true, file: safeName, module: moduleKey, rows: rowCount, cloud: cloudOk, cloudError: cloudErr });
     } catch (e) {
       sendJson(res, 500, { ok: false, error: '写入失败：' + e.message });
+    }
+    return;
+  }
+
+  // 云库模块清单（登录后）：供后台管理页展示
+  if (pathname === '/api/cloud/modules' && req.method === 'GET') {
+    const username = getSessionUser(req);
+    if (!username) { sendJson(res, 401, { ok: false, error: '未登录' }); return; }
+    if (!cloudDb.isEnabled()) { sendJson(res, 200, { ok: true, enabled: false, modules: [] }); return; }
+    try {
+      const c = await cloudDb.listModules();
+      const keys = Object.keys(c.modules || {});
+      const modules = keys.map(function (k) {
+        const p = c.modules[k] || {};
+        return {
+          module: k,
+          source: p.source || '',
+          rows: (p.rows && p.rows.length) || (p.rawRows && p.rawRows.length) || 0
+        };
+      });
+      sendJson(res, 200, { ok: true, enabled: true, updatedAt: c.updatedAt, modules: modules });
+    } catch (e) {
+      sendJson(res, 500, { ok: false, error: e.message });
+    }
+    return;
+  }
+
+  // 重置某模块（登录后）：删除云库记录，回退到本地 CSV/示例
+  if (pathname === '/api/cloud/reset' && req.method === 'POST') {
+    const username = getSessionUser(req);
+    if (!username) { sendJson(res, 401, { ok: false, error: '未登录' }); return; }
+    const b = await readBody(req);
+    const moduleKey = String(b.module || '').trim();
+    if (!moduleKey) { sendJson(res, 400, { ok: false, error: '缺少模块' }); return; }
+    try {
+      if (cloudDb.isEnabled()) await cloudDb.deleteModule(moduleKey);
+      sendJson(res, 200, { ok: true, module: moduleKey });
+    } catch (e) {
+      sendJson(res, 500, { ok: false, error: e.message });
     }
     return;
   }
