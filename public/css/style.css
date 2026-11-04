@@ -179,3 +179,28 @@ table.tbl tr.drow.pinned td:first-child { box-shadow: inset 3px 0 0 var(--orange
 .chart-panel .panel-head { position: relative; }
 .chart-panel .ph-tools { display: flex; gap: 8px; }
 .chart-panel .ph-tools .tbtn { padding: 4px 10px; font-size: 12px; }
+
+/* ===== 数据新鲜度提示条 ===== */
+.syncbar {
+  margin: 0 24px 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #fff7e6;
+  border: 1px solid #ffd591;
+  color: #8a5a00;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.syncbar .sb-icon { font-size: 15px; }
+.syncbar .sb-text { flex: 1; min-width: 260px; line-height: 1.6; }
+.syncbar .sb-text b { color: #7a4c00; }
+.syncbar .sb-btn {
+  border: 0; border-radius: 8px; padding: 6px 14px; font-size: 13px; cursor: pointer;
+  background: #fa8c16; color: #fff;
+}
+.syncbar .sb-btn:hover { opacity: .9; }
+.syncbar .sb-close { cursor: pointer; color: #b98b3a; font-size: 16px; padding: 0 4px; }
+.syncbar.ok { background: #f0f9f1; border-color: #b7e2be; color: #276b33; }

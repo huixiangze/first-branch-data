@@ -115,10 +115,21 @@ async function deleteModule(module) {
   return request('DELETE', '?module=eq.' + encodeURIComponent(module));
 }
 
+// 只取各模块的更新时间（轻量，用于新鲜度判断）：{ module: ISO }
+async function listTimes() {
+  const rows = await request('GET', '?select=module,updated_at');
+  const out = {};
+  (Array.isArray(rows) ? rows : []).forEach(function (r) {
+    if (r && r.module && r.updated_at) out[r.module] = r.updated_at;
+  });
+  return out;
+}
+
 module.exports = {
   isEnabled: isEnabled,
   loadConfig: loadConfig,
   listModules: listModules,
+  listTimes: listTimes,
   upsertModule: upsertModule,
   deleteModule: deleteModule
 };

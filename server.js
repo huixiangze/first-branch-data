@@ -11,6 +11,7 @@ const ROOT = __dirname;
 const PUBLIC = path.join(ROOT, 'public');
 const store = require('./src/store');
 const cloudDb = require('./src/cloudDb');
+const kdocsMeta = require('./src/kdocsMeta');
 const fetcher = require('./src/wpsFetcher');
 
 const PORT = process.env.PORT || 8090;
@@ -179,6 +180,23 @@ async function handleApi(req, res, pathname) {
     if (!username) { sendJson(res, 401, { ok: false, error: '未登录' }); return; }
     const data = await store.getModulesMerged();
     sendJson(res, 200, data);
+    return;
+  }
+
+  if (pathname === '/api/freshness') {
+    const username = getSessionUser(req);
+    if (!username) { sendJson(res, 401, { ok: false, error: '未登录' }); return; }
+    try {
+      const cfg = store.loadWpsConfig();
+      let times = {};
+      if (cloudDb.isEnabled()) {
+        try { times = await cloudDb.listTimes(); } catch (e) { times = {}; }
+      }
+      const r = await kdocsMeta.checkFreshness(cfg, times);
+      sendJson(res, 200, Object.assign({ ok: true }, r));
+    } catch (e) {
+      sendJson(res, 200, { ok: false, error: e.message, items: [] });
+    }
     return;
   }
 

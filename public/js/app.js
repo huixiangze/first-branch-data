@@ -574,6 +574,48 @@
   }
 
   // ---------- 数据 ----------
+  // ---------- 数据新鲜度：金山文档表格是否已被改动 ----------
+  function fmtTime(ms) {
+    if (!ms) return '--';
+    var d = new Date(ms);
+    return String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + ' ' +
+      String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+
+  function renderSyncBar(j) {
+    var el = $('syncBar');
+    if (!el) return;
+    var items = (j && j.items) || [];
+    var stale = items.filter(function (x) { return x.stale && x.reachable && x.linkOpen; });
+
+    if (!stale.length) { el.style.display = 'none'; return; }
+
+    var parts = [];
+    stale.forEach(function (x) {
+      parts.push('<b>' + x.label + '</b>（表格已于 ' + fmtTime(x.mtime) + ' 更新' +
+        (x.hasCloudData ? '' : '，页面尚无数据') + '）');
+    });
+
+    var html = '<span class="sb-icon">⚠</span><span class="sb-text">以下表格有更新，页面数据还未同步：' + parts.join('；') +
+      '。导出后在「后台」上传即可，全站实时生效。</span>' +
+      '<button class="sb-btn" id="sbOpen">打开表格</button>' +
+      '<span class="sb-close" id="sbClose">×</span>';
+    el.innerHTML = html;
+    el.style.display = 'flex';
+    el.className = 'syncbar';
+
+    var first = stale[0];
+    $('sbOpen').onclick = function () { if (first && first.url) window.open(first.url, '_blank'); };
+    $('sbClose').onclick = function () { el.style.display = 'none'; };
+  }
+
+  function fetchFreshness() {
+    return fetch('/api/freshness?_t=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { if (j && j.ok) renderSyncBar(j); })
+      .catch(function () { /* 探测失败不影响主流程 */ });
+  }
+
   function fetchData(force) {
     return fetch('/api/data?_t=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' }).then(function (r) {
       if (r.status === 401) { location.reload(); return null; }
@@ -589,7 +631,8 @@
 
   function startPolling() {
     if (state.pollTimer) clearInterval(state.pollTimer);
-    state.pollTimer = setInterval(function () { fetchData(false); }, 60000);
+    state.pollTimer = setInterval(function () { fetchData(false); fetchFreshness(); }, 60000);
+    fetchFreshness();
   }
 
   function tickClock() {
