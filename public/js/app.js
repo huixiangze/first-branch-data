@@ -12,6 +12,7 @@
     rongpin: 'M3 6h18v3H3zm0 5h18v3H3zm0 5h12v3H3z',
     deputy: 'M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-8 2-8 5v1h16v-1c0-3-4-5-8-5z',
     preference: 'M12 21 4 13a4.5 4.5 0 0 1 8-3 4.5 4.5 0 0 1 8 3z',
+    commodity: 'M4 7h16l-1.5 13H5.5zM9 7V5a3 3 0 0 1 6 0v2',
     forecast: 'M3 17l6-6 4 4 8-8'
   };
   function icon(key) {
@@ -24,6 +25,7 @@
     { key: 'forecast', label: '业绩预估' },
     { key: 'anchorRank', label: '主播榜单' },
     { key: 'anchorPerformance', label: '主播业绩' },
+    { key: 'commodity', label: '商品结构' },
     { key: 'rongpin', label: '预估结算' }
   ];
 
@@ -48,6 +50,20 @@
   }
   function trendCls(t) { return t === 'up' ? 'green' : t === 'down' ? 'red' : 'gray'; }
   function trendArrow(t) { return t === 'up' ? '▲' : t === 'down' ? '▼' : '■'; }
+
+  // ---------- 数值工具（表格里的金额是带千分位的字符串）----------
+  function toNum(v) {
+    var n = parseFloat(String(v == null ? '' : v).replace(/[,，%\s]/g, ''));
+    return isNaN(n) ? 0 : n;
+  }
+  function wan(v) { return Math.round(toNum(v) / 10000 * 100) / 100; }
+  function fmtWan(v) {
+    var n = wan(v);
+    return n.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+  }
+  function fmtMoney(v) {
+    return toNum(v).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+  }
 
   // ---------- CSV 导出 / 导入 ----------
   function toCSV(columns, rows) {
@@ -252,7 +268,8 @@
   var VIEWS = {
     home: function (d) {
       var h = d.home || {};
-      var html = '<div class="view-title">首页</div><div class="view-sub">核心经营总览 · 数据来源：WPS共享表格（示例）</div>';
+      var asOf = h.asOf ? '数据截止 ' + h.asOf + ' · ' : '';
+      var html = '<div class="view-title">首页</div><div class="view-sub">核心经营总览 · ' + asOf + sourceLabel(h.source) + '</div>';
       html += kpiRow(h.kpis);
       html += '<div class="grid-2">';
       var an = h.anomaly || {};
@@ -266,6 +283,16 @@
         return '<div class="list-item"><div><div class="li-name">' + esc(n.title) + '</div><div class="li-meta">' + esc(n.time) + '</div></div><span class="tag ' + (n.level === 'warn' ? 'orange' : 'blue') + '">' + (n.level === 'warn' ? '重要' : '通知') + '</span></div>';
       }).join('') + '</div>';
       var ck = h.clock || {};
+      if (!ck.time) {
+        var now = new Date();
+        var wd = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][now.getDay()];
+        var last = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+        ck = {
+          time: ('0' + now.getHours()).slice(-2) + ':' + ('0' + now.getMinutes()).slice(-2),
+          weekday: (now.getMonth() + 1) + '月' + now.getDate() + '日 ' + wd,
+          daysLeft: last - now.getDate()
+        };
+      }
       html += '<div class="panel clock-card"><div class="big">' + esc(ck.time || '--:--') + '</div><div class="wk">' + esc(ck.weekday || '') + '</div><div class="dl">距离月底还有 ' + esc(ck.daysLeft || '-') + ' 天</div></div>';
       html += '</div>';
       html += '</div>';
@@ -274,40 +301,170 @@
 
     anchorRank: function (d) {
       var m = d.anchorRank || {};
-      var html = '<div class="view-title">主播榜单</div><div class="view-sub">主播销售明细 · ' + sourceLabel(m.source) + ' · 点击表头排序、点击行可置顶</div>';
+      var rows = (m.rows || []).slice();
+      var s = m.summary || {};
+      var html = '<div class="view-title">主播榜单</div><div class="view-sub">' +
+        (s.anchors ? s.anchors + ' 位主播 · ' : '') +
+        (m.asOf ? '数据截止 ' + esc(m.asOf) + ' · ' : '') + sourceLabel(m.source) + '</div>';
+
+      if (s.anchors) {
+        html += kpiRow([
+          { title: '下播GMV累计', value: fmtWan(s.gmvCum), unit: '万', sub: '当日 ' + fmtWan(s.gmvToday) + ' 万', trend: 'flat' },
+          { title: '预估结算GMV', value: fmtWan(s.settleCum), unit: '万', sub: '累计口径', trend: 'up' },
+          { title: '平均结算率', value: s.avgRate, unit: '%', sub: '整体口径 ' + s.calcRate + '%', trend: 'up' },
+          { title: '在播主播', value: s.anchors, unit: '人', sub: '电商直播', trend: 'flat' }
+        ]);
+      }
+
+      var byCum = rows.slice().sort(function (a, b) { return toNum(b.gmvCum) - toNum(a.gmvCum); }).slice(0, 10);
+      if (byCum.length) {
+        html += chartPanel('下播GMV累计 Top10（万元）', '', window.chartHelpers.hBars(
+          byCum.map(function (r) { return { label: r.anchor, value: wan(r.gmvCum) }; }), { unit: ' 万' }));
+      }
+
+      var byRate = rows.filter(function (r) { return toNum(r.gmvCum) > 0 && toNum(r.rate) > 0; })
+        .sort(function (a, b) { return toNum(b.rate) - toNum(a.rate); }).slice(0, 10);
+      if (byRate.length) {
+        html += chartPanel('结算率 Top10（%）', '仅统计已产生GMV的主播', window.chartHelpers.hBars(
+          byRate.map(function (r) { return { label: r.anchor, value: toNum(r.rate), color: '#2bbf7a' }; }), { unit: '%' }));
+      }
+
       var cols = [
-        { key: 'anchor', label: '主播' }, { key: 'org', label: '所属机构' }, { key: 'category', label: '品类' },
-        { key: 'gmv', label: '下播GMV累计(万)', cls: 'mono' }, { key: 'avg', label: '场均销售额(万)', cls: 'mono' },
-        { key: 'target', label: '月销售目标(万)', cls: 'mono' }, { key: 'rate', label: '月目标完成度(%)', cls: 'mono' },
-        { key: 'aov', label: '客单价', cls: 'mono' }, { key: 'rank', label: '完成排名', cls: 'mono' }
+        { key: 'rank', label: '排名', cls: 'mono' },
+        { key: 'anchor', label: '主播名' },
+        { key: 'org', label: '所属公司' },
+        { key: 'type', label: '类型' },
+        { key: 'gmv', label: '下播GMV(元)', cls: 'mono' },
+        { key: 'gmvCum', label: '下播GMV累计(元)', cls: 'mono' },
+        { key: 'settleCum', label: '预估结算GMV累计(元)', cls: 'mono' },
+        { key: 'rate', label: '结算率(%)', cls: 'mono' }
       ];
-      var structured = '<div class="panel"><div class="panel-head"><div class="ph-title">主播销售明细</div></div>' +
-        dataTable('anchorRank', cols, m.rows || [], { exportName: '主播销售明细', month: true }) + '</div>';
-      var top5 = filterMonth((m.rows || []).slice(0, 5), 'anchorRank').map(function (r) { return { label: r.anchor, value: r.gmv, color: '#2f6fed' }; });
-      structured += chartPanel('GMV Top5 主播', '', window.chartHelpers.hBars(top5, { unit: ' 万' }));
-      html += moduleBody('anchorRank', m, structured);
+      html += '<div class="panel"><div class="panel-head"><div class="ph-title">主播销售明细（精选）</div>' +
+        '<div class="ph-sub">共 ' + rows.length + ' 位主播 · 点击表头排序、点击行可置顶</div></div>' +
+        dataTable('anchorRank', cols, rows, { exportName: '主播榜单_精选' }) + '</div>';
+
+      if (m.rawHeaders && m.rawHeaders.length) {
+        html += genericTable('anchorRank', m.rawHeaders, m.rawRows, {
+          title: '原始汇总表（全部 ' + m.rawHeaders.length + ' 列）', exportName: '主播榜单'
+        });
+      }
+      html += uploadBtn('anchorRank');
+      return html;
+    },
+
+    commodity: function (d) {
+      var m = d.commodity || {};
+      var t = m.total || {};
+      var days = m.days || [];
+      var range = days.length ? (days[0].date + ' ~ ' + days[days.length - 1].date) : '';
+      var html = '<div class="view-title">商品结构</div><div class="view-sub">商品级明细聚合' +
+        (range ? ' · 明细区间 ' + esc(range) : '') + ' · ' + sourceLabel(m.source) + '</div>';
+
+      html += kpiRow([
+        { title: '商品明细', value: (t.items || 0).toLocaleString('zh-CN'), unit: '行', sub: '来自「数据来源」表', trend: 'flat' },
+        { title: '支付GMV', value: fmtWan(t.pay), unit: '万', sub: range || '全部商品', trend: 'flat' },
+        { title: '结算GMV', value: fmtWan(t.settle), unit: '万', sub: '风控后预估', trend: 'up' },
+        { title: '整体结算率', value: t.rate, unit: '%', sub: '结算 / 支付', trend: 'up' }
+      ]);
+
+      if ((m.categories || []).length) {
+        html += chartPanel('一级类目 结算GMV 排行（万元）', '', window.chartHelpers.hBars(
+          m.categories.slice(0, 10).map(function (c) { return { label: c.name.length > 12 ? c.name.slice(0, 12) + '…' : c.name, value: wan(c.settle) }; }),
+          { unit: ' 万', labelW: 150 }));
+      }
+      if ((m.products || []).length) {
+        html += chartPanel('TOP 商品 结算GMV（万元）', '', window.chartHelpers.hBars(
+          m.products.slice(0, 10).map(function (p) { return { label: p.name.length > 14 ? p.name.slice(0, 14) + '…' : p.name, value: wan(p.settle), color: '#2bbf7a' }; }),
+          { unit: ' 万', labelW: 190 }));
+      }
+      if ((m.sellers || []).length) {
+        html += chartPanel('卖家/店铺 结算GMV（万元）', '', window.chartHelpers.hBars(
+          m.sellers.slice(0, 10).map(function (p) { return { label: p.name, value: wan(p.settle), color: '#ff8c3b' }; }),
+          { unit: ' 万', labelW: 150 }));
+      }
+
+      var catRows = (m.categories || []).map(function (c) {
+        return { name: c.name, items: c.items, pay: fmtMoney(c.pay), settle: fmtMoney(c.settle), rate: c.rate };
+      });
+      html += '<div class="panel"><div class="panel-head"><div class="ph-title">类目明细</div>' +
+        '<div class="ph-sub">共 ' + catRows.length + ' 个一级类目</div></div>' +
+        dataTable('commodity', [
+          { key: 'name', label: '一级类目' },
+          { key: 'items', label: '商品行数', cls: 'mono' },
+          { key: 'pay', label: '支付GMV(元)', cls: 'mono' },
+          { key: 'settle', label: '结算GMV(元)', cls: 'mono' },
+          { key: 'rate', label: '结算率(%)', cls: 'mono' }
+        ], catRows, { exportName: '商品类目明细' }) + '</div>';
+
+      var prodRows = (m.products || []).map(function (p) {
+        return { name: p.name, cat: p.cat, seller: p.seller, pay: fmtMoney(p.pay), settle: fmtMoney(p.settle), rate: p.rate };
+      });
+      html += '<div class="panel"><div class="panel-head"><div class="ph-title">TOP 商品明细</div>' +
+        '<div class="ph-sub">按结算GMV 取前 ' + prodRows.length + ' 个商品</div></div>' +
+        dataTable('commodity_prod', [
+          { key: 'name', label: '商品名称' },
+          { key: 'cat', label: '一级类目' },
+          { key: 'seller', label: '店铺' },
+          { key: 'pay', label: '支付GMV(元)', cls: 'mono' },
+          { key: 'settle', label: '结算GMV(元)', cls: 'mono' },
+          { key: 'rate', label: '结算率(%)', cls: 'mono' }
+        ], prodRows, { exportName: 'TOP商品明细' }) + '</div>';
+
       return html;
     },
 
     anchorPerformance: function (d) {
       var m = d.anchorPerformance || {};
-      var html = '<div class="view-title">主播业绩</div><div class="view-sub">主播业绩明细 · ' + sourceLabel(m.source) + '</div>';
-      var structured = '';
-      structured += '<div class="grid-3">';
-      (m.categories || []).forEach(function (c) {
-        structured += '<div class="panel" style="text-align:center"><div class="k-val">' + esc(c.count) + ' <span class="unit">人</span></div><div class="k-title" style="margin-top:6px">' + esc(c.name) + '</div><div style="margin-top:8px"><span class="tag ' + (c.tag || 'gray') + '">' + esc(c.amount) + '</span></div></div>';
+      var html = '<div class="view-title">主播业绩</div><div class="view-sub">每日直播快照 · ' +
+        (m.asOf ? '数据截止 ' + esc(m.asOf) + ' · ' : '') + sourceLabel(m.source) + '</div>';
+
+      var sheets = m.sheets || [];
+      if (!sheets.length) {
+        // 兼容旧结构
+        var det = m.detail || {};
+        html += '<div class="panel"><div class="panel-head"><div class="ph-title">主播业绩明细</div></div>' +
+          dataTable('anchorPerformance', [
+            { key: 'date', label: '日期' }, { key: 'anchor', label: '主播' },
+            { key: 'est', label: '预估(万)', cls: 'mono' }, { key: 'actual', label: '实际(万)', cls: 'mono' },
+            { key: 'diff', label: '差额(万)', cls: 'mono' }, { key: 'rate', label: '差额率(%)', cls: 'mono' }
+          ], det.rows || [], { exportName: '主播业绩明细' }) + '</div>';
+        return html;
+      }
+
+      function pickCol(headers, names) {
+        for (var i = 0; i < names.length; i++) {
+          for (var j = 0; j < headers.length; j++) {
+            if (headers[j] === names[i]) return headers[j];
+          }
+        }
+        return null;
+      }
+
+      // 概览卡片
+      html += '<div class="grid-3">';
+      sheets.forEach(function (s) {
+        var cGmv = pickCol(s.headers, ['下播GMV']);
+        var cSet = pickCol(s.headers, ['风控后结算GMV(预估拼接)(元)', '风控后结算GMV(元)']);
+        var totG = 0, totS = 0;
+        (s.rows || []).forEach(function (r) {
+          if (cGmv) totG += toNum(r[cGmv]);
+          if (cSet) totS += toNum(r[cSet]);
+        });
+        html += '<div class="panel" style="text-align:center">' +
+          '<div class="k-title">' + esc(s.name) + ' 快照</div>' +
+          '<div class="k-val" style="margin-top:6px">' + fmtWan(totG) + '<span class="unit">万</span></div>' +
+          '<div class="k-sub" style="justify-content:center">下播GMV · ' + esc(s.date || '-') + '</div>' +
+          '<div style="margin-top:8px"><span class="tag green">结算 ' + fmtWan(totS) + ' 万</span> <span class="tag blue">' + (s.rows || []).length + ' 人</span></div>' +
+          '</div>';
       });
-      structured += '</div>';
-      var det = m.detail || {};
-      var cols = [
-        { key: 'date', label: '日期' }, { key: 'anchor', label: '主播' }, { key: 'est', label: '预估(万)', cls: 'mono' },
-        { key: 'actual', label: '实际(万)', cls: 'mono' }, { key: 'diff', label: '差额(万)', cls: 'mono' },
-        { key: 'diffRate', label: '差额率(%)', cls: 'mono' }, { key: 'status', label: '状态', tag: 'status' }, { key: 'tag', label: '是否打标' }
-      ];
-      structured += '<div class="panel"><div class="panel-head"><div class="ph-title">主播业绩明细</div><div class="ph-sub">' + (det.tabs ? det.tabs.join(' / ') : '') + '</div></div>';
-      structured += dataTable('anchorPerformance', cols, det.rows || [], { exportName: '主播业绩明细', month: true });
-      structured += '</div>';
-      html += moduleBody('anchorPerformance', m, structured);
+      html += '</div>';
+
+      // 最新快照全表（其余快照可在「主播榜单」的原始表中查看）
+      var latest = sheets[sheets.length - 1];
+      html += genericTable('anchorPerformance', latest.headers, latest.rows, {
+        title: latest.name + ' 快照明细（' + latest.date + '，' + latest.headers.length + ' 列 / ' + latest.rows.length + ' 行）',
+        exportName: '主播业绩_' + latest.name
+      });
       return html;
     },
 
@@ -366,7 +523,43 @@
 
     rongpin: function (d) {
       var m = d.rongpin || {};
-      var html = '<div class="view-title">预估结算</div><div class="view-sub">预估结算明细（日更） · ' + sourceLabel(m.source) + ' · ' + esc(m.updated || '-') + '</div>';
+      var rank = d.anchorRank || {};
+      var daily = rank.daily || [];
+
+      if (daily.length) {
+        var s = rank.summary || {};
+        var active = daily.filter(function (x) { return toNum(x.settle) > 0; });
+        var html = '<div class="view-title">预估结算</div><div class="view-sub">11月每日预估结算进度 · ' +
+          (rank.asOf ? '数据截止 ' + esc(rank.asOf) + ' · ' : '') + sourceLabel(rank.source) + '</div>';
+
+        html += kpiRow([
+          { title: '预估结算GMV', value: fmtWan(s.settleCum), unit: '万', sub: '累计口径', trend: 'up' },
+          { title: '平均结算率', value: s.avgRate, unit: '%', sub: '整体 ' + s.calcRate + '%', trend: 'up' },
+          { title: '已出数据', value: active.length, unit: '天', sub: '本月累计', trend: 'flat' },
+          { title: '预计剩余', value: Math.max(0, 30 - active.length), unit: '天', sub: '1~30日口径', trend: 'flat' }
+        ]);
+
+        if (active.length) {
+          html += chartPanel('每日预估结算GMV（万元）', '仅统计已产生结算数据的天',
+            window.chartHelpers.hBars(active.map(function (x) {
+              return { label: x.day, value: wan(x.settle) };
+            }), { unit: ' 万' }));
+        }
+
+        var rows30 = daily.map(function (x) {
+          return { day: x.day, settle: fmtMoney(x.settle), rate: x.rate > 0 ? x.rate : '-' };
+        });
+        html += '<div class="panel"><div class="panel-head"><div class="ph-title">1~30 日预估结算明细</div>' +
+          '<div class="ph-sub">来自「汇总」页 预估结算GMV · 1日~30日</div></div>' +
+          dataTable('rongpin_daily', [
+            { key: 'day', label: '日期' },
+            { key: 'settle', label: '预估结算GMV(元)', cls: 'mono' },
+            { key: 'rate', label: '当日平均结算率(%)', cls: 'mono' }
+          ], rows30, { exportName: '预估结算_每日' }) + '</div>';
+        return html;
+      }
+
+      var out = '<div class="view-title">预估结算</div><div class="view-sub">预估结算明细（日更） · ' + sourceLabel(m.source) + ' · ' + esc(m.updated || '-') + '</div>';
       var structured = '';
       structured += '<div class="grid-2b">';
       structured += chartPanel('融品预估结算GMV对比(万)', '', window.chartHelpers.vBars(filterMonth(m.settlement || [], 'rongpin'), { unit: ' 万' }));
@@ -377,8 +570,8 @@
         { key: 'commission', label: '预估佣金(万)', cls: 'mono' }, { key: 'dept', label: '部门' }, { key: 'growth', label: '环比增长(%)', cls: 'mono' }
       ];
       structured += '<div class="panel"><div class="panel-head"><div class="ph-title">分销播报（按商品）</div></div>' + dataTable('rongpin_dist', dcols, m.distribution || [], { exportName: '分销播报' }) + '</div>';
-      html += moduleBody('rongpin', m, structured);
-      return html;
+      out += moduleBody('rongpin', m, structured);
+      return out;
     },
 
     deputy: function (d) {

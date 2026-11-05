@@ -1,0 +1,26 @@
+# 第一分公司数据中台 —— systemd 托管单元
+# 安装（root）：
+#   cp scripts/first-branch-data.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now first-branch-data
+# 查看：
+#   systemctl status first-branch-data
+#   journalctl -u first-branch-data -f
+
+[Unit]
+Description=第一分公司数据中台
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/first-branch-data
+ExecStart=/usr/bin/node /opt/first-branch-data/server.js
+Environment=PORT=8090
+Restart=always
+RestartSec=3
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

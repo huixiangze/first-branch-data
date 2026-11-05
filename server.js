@@ -328,7 +328,10 @@ store.ensureDirs();
   setInterval(function () { store.refreshAll().catch(function (e) { console.error(e); }); }, minutes * 60 * 1000);
 
   const ssl = loadSslOptions();
-  if (ssl) {
+  // 云托管/发布环境只会注入 PORT 并暴露单一端口，此时必须走 HTTP+PORT，
+  // 不能用 443 证书模式，否则外部访问不到。
+  const inCloud = !!process.env.PORT;
+  if (ssl && !inCloud) {
     process.env.FORCE_HTTPS = '1';
     const https = require('https');
     const httpsPort = Number(process.env.HTTPS_PORT || 443);
