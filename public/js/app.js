@@ -1,71 +1,98 @@
+/* 第一分公司数据中台 · 前端应用层
+ * 设计目标：从「报表堆」变成「决策台」——先给结论，再给证据，最后才是明细。
+ */
 (function () {
   'use strict';
+
+  var CH = window.chartHelpers;
+  var IN = window.Insights;
 
   // ---------- 图标 ----------
   var ICONS = {
     home: 'M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z',
     anchorRank: 'M5 9h3v11H5zm5.5-5h3v16h-3zm5.5 7h3v9h-3z',
     anchorPerformance: 'M3 13h4v8H3zm7-6h4v14h-4zm7-9h4v23h-4z',
-    productInsight: 'M12 5C6 5 2 12 2 12s4 7 10 7 10-7 10-7-4-7-10-7zm0 11a4 4 0 1 1 0-8 4 4 0 0 1 0 8z',
-    productData: 'M12 2 3 7v10l9 5 9-5V7zm0 2.2 6.5 3.6L12 11.5 5.5 7.8zM5 9.7l6 3.3v6.5l-6-3.3zm14 0v6.5l-6 3.3V13z',
-    productDept: 'M3 3h8v8H3zm10 0h8v8h-8zM3 13h8v8H3zm10 0h8v8h-8z',
-    rongpin: 'M3 6h18v3H3zm0 5h18v3H3zm0 5h12v3H3z',
-    deputy: 'M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-8 2-8 5v1h16v-1c0-3-4-5-8-5z',
-    preference: 'M12 21 4 13a4.5 4.5 0 0 1 8-3 4.5 4.5 0 0 1 8 3z',
     commodity: 'M4 7h16l-1.5 13H5.5zM9 7V5a3 3 0 0 1 6 0v2',
-    forecast: 'M3 17l6-6 4 4 8-8'
+    forecast: 'M3 17l6-6 4 4 8-8',
+    rongpin: 'M3 6h18v3H3zm0 5h18v3H3zm0 5h12v3H3z',
+    gmv: 'M12 2 3 7v10l9 5 9-5V7zm0 2.2 6.5 3.6L12 11.5 5.5 7.8zM5 9.7l6 3.3v6.5l-6-3.3zm14 0v6.5l-6 3.3V13z',
+    settle: 'M12 1a11 11 0 1 0 0 22 11 11 0 0 0 0-22zm1 17h-2v-1.2a4 4 0 0 1-2.8-1.7l1.5-1.2c.4.7 1 1.1 1.8 1.1.7 0 1.1-.3 1.1-.8 0-.6-.5-.8-1.6-1.2-1.5-.5-2.7-1.2-2.7-2.9 0-1.4 1-2.4 2.7-2.7V6h2v1.4c1 .2 1.8.8 2.3 1.6l-1.5 1.2c-.4-.6-.9-1-1.6-1-.6 0-1 .3-1 .7 0 .5.5.7 1.7 1.1 1.6.5 2.6 1.3 2.6 3 0 1.5-1 2.5-2.5 2.8z',
+    rate: 'M4 20h4V9H4zm6 0h4V4h-4zm6 0h4v-7h-4z',
+    user: 'M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-8 2-8 5v1h16v-1c0-3-4-5-8-5z'
   };
   function icon(key) {
     return '<svg viewBox="0 0 24 24"><path d="' + (ICONS[key] || ICONS.home) + '"/></svg>';
   }
 
-  // ---------- 模块定义 ----------
+  // ---------- 模块 ----------
   var MODULES = [
-    { key: 'home', label: '首页' },
-    { key: 'forecast', label: '业绩预估' },
-    { key: 'anchorRank', label: '主播榜单' },
-    { key: 'anchorPerformance', label: '主播业绩' },
-    { key: 'commodity', label: '商品结构' },
-    { key: 'rongpin', label: '预估结算' }
+    { key: 'home', label: '经营驾驶舱', group: '概览' },
+    { key: 'anchorRank', label: '主播榜单', group: '经营' },
+    { key: 'anchorPerformance', label: '主播业绩', group: '经营' },
+    { key: 'forecast', label: '业绩预估', group: '经营' },
+    { key: 'rongpin', label: '预估结算', group: '经营' },
+    { key: 'commodity', label: '商品结构', group: '货品' }
   ];
 
   var state = {
     user: null, data: null, current: 'home', lastUpdated: null, pollTimer: null,
-    overrides: {},          // moduleKey -> { rows:[...] }  (导入覆盖)
-    sort: {},               // moduleKey -> { key, dir }
-    pin: {},                // moduleKey -> { rowKey:true }
-    month: {},              // moduleKey -> '全部'|'10月'|'11月'
-    search: {},             // moduleKey -> string
-    lastTable: {},          // moduleKey -> { columns, rows, name }
-    importModule: null,
-    _focus: null
+    search: {}, page: {}, sort: {}, pageSize: {},
+    tableMeta: {},          // moduleKey -> { cols, rows, opts }
+    filter: {},             // 主播榜快捷筛选
+    cmdIndex: null,         // 命令面板索引
+    _scroll: {}
   };
 
-  // ---------- 工具 ----------
+  // ---------- 基础工具 ----------
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function num(v) { return IN ? IN.num(v) : parseFloat(String(v == null ? '' : v).replace(/[,，%\s]/g, '')) || 0; }
+  function wan(v) { var n = num(v) / 10000; return n.toLocaleString('zh-CN', { maximumFractionDigits: n >= 100 ? 0 : 2 }); }
+  function wanNum(v) { var n = Math.round((num(v) / 10000) * 100) / 100; return n; }
+  // 金额自动进位：≥1亿用亿，≥1万用万，否则元
+  function amountParts(v) {
+    var n = num(v);
+    var a = Math.abs(n);
+    if (a >= 100000000) return { value: (n / 100000000).toFixed(2), unit: '亿' };
+    if (a >= 10000) return { value: (n / 10000).toFixed(a >= 1000000 ? 0 : 2), unit: '万' };
+    return { value: n.toLocaleString('zh-CN', { maximumFractionDigits: 0 }), unit: '元' };
+  }
+  function money(v) { return num(v).toLocaleString('zh-CN', { maximumFractionDigits: 2 }); }
+  function pct1(v) { var n = Number(v); return (isFinite(n) ? (Math.round(n * 10) / 10) : 0) + '%'; }
+  function modules() { return (state.data && state.data.modules) || {}; }
+  function deltaHtml(v, unit) {
+    var n = Number(v) || 0;
+    var cls = n > 0 ? 'up' : n < 0 ? 'down' : 'flat';
+    var arrow = n > 0 ? '▲' : n < 0 ? '▼' : '■';
+    return '<span class="delta ' + cls + '">' + arrow + ' ' + (n > 0 ? '+' : '') + (Math.round(n * 10) / 10) + (unit || '%') + '</span>';
+  }
   function statusTag(s) {
     var map = { '已完成': 'green', '未达标': 'red', '领先': 'green', '正常': 'blue', '预警': 'orange', '落后': 'red', '是': 'blue', '否': 'gray' };
     return '<span class="tag ' + (map[s] || 'gray') + '">' + esc(s) + '</span>';
   }
-  function trendCls(t) { return t === 'up' ? 'green' : t === 'down' ? 'red' : 'gray'; }
-  function trendArrow(t) { return t === 'up' ? '▲' : t === 'down' ? '▼' : '■'; }
+  function sourceLabel(src) {
+    if (src === 'cloud') return '云数据库实时';
+    if (src === 'wps') return 'WPS 直连';
+    if (src === 'csv') return 'WPS 导出文件';
+    return '示例数据';
+  }
+  function fmtTime(ms) {
+    if (!ms) return '--';
+    var d = new Date(ms);
+    return String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + ' ' +
+      String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+  // Excel 日期序列号（如 46330）转成 YYYY-MM-DD
+  function fmtExcelDate(v) {
+    var n = Number(v);
+    if (!isFinite(n) || n < 20000 || n > 80000) return v;
+    var d = new Date(Date.UTC(1899, 11, 30) + n * 86400000);
+    var mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    var dd = String(d.getUTCDate()).padStart(2, '0');
+    return d.getUTCFullYear() + '-' + mm + '-' + dd;
+  }
 
-  // ---------- 数值工具（表格里的金额是带千分位的字符串）----------
-  function toNum(v) {
-    var n = parseFloat(String(v == null ? '' : v).replace(/[,，%\s]/g, ''));
-    return isNaN(n) ? 0 : n;
-  }
-  function wan(v) { return Math.round(toNum(v) / 10000 * 100) / 100; }
-  function fmtWan(v) {
-    var n = wan(v);
-    return n.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
-  }
-  function fmtMoney(v) {
-    return toNum(v).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
-  }
-
-  // ---------- CSV 导出 / 导入 ----------
+  // ---------- CSV 导出 ----------
   function toCSV(columns, rows) {
     function cell(v) {
       v = (v == null ? '' : String(v));
@@ -73,10 +100,8 @@
       return v;
     }
     var lines = [columns.map(function (c) { return cell(c.label); }).join(',')];
-    rows.forEach(function (r) {
-      lines.push(columns.map(function (c) { return cell(r[c.key]); }).join(','));
-    });
-    return '﻿' + lines.join('\r\n'); // UTF-8 BOM：Excel 中文不乱码
+    rows.forEach(function (r) { lines.push(columns.map(function (c) { return cell(r[c.key]); }).join(',')); });
+    return '\ufeff' + lines.join('\r\n');
   }
   function downloadCSV(columns, rows, filename) {
     var blob = new Blob([toCSV(columns, rows)], { type: 'text/csv;charset=utf-8' });
@@ -84,28 +109,8 @@
     var a = document.createElement('a');
     a.href = url; a.download = filename;
     document.body.appendChild(a); a.click();
-    setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+    setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(url); }, 800);
   }
-  function parseCSV(text) {
-    var rows = [], row = [], field = '', inQ = false;
-    for (var i = 0; i < text.length; i++) {
-      var ch = text[i];
-      if (inQ) {
-        if (ch === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else { inQ = false; } }
-        else field += ch;
-      } else {
-        if (ch === '"') inQ = true;
-        else if (ch === ',') { row.push(field); field = ''; }
-        else if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
-        else if (ch === '\r') { /* skip */ }
-        else field += ch;
-      }
-    }
-    if (field !== '' || row.length) { row.push(field); rows.push(row); }
-    return rows;
-  }
-
-  // ---------- 图表导出 PNG ----------
   function exportSVGToPNG(svgEl, filename) {
     var xml = new XMLSerializer().serializeToString(svgEl);
     var svgBlob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
@@ -113,18 +118,18 @@
     var img = new Image();
     img.onload = function () {
       var vb = svgEl.viewBox && svgEl.viewBox.baseVal;
-      var w = vb && vb.width ? vb.width : 680;
-      var h = vb && vb.height ? vb.height : 300;
+      var w = (vb && vb.width) || 680, h = (vb && vb.height) || 300;
       var canvas = document.createElement('canvas');
-      canvas.width = w; canvas.height = h;
+      canvas.width = w * 2; canvas.height = h * 2;
       var ctx = canvas.getContext('2d');
+      ctx.scale(2, 2);
       ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h);
       ctx.drawImage(img, 0, 0, w, h);
       canvas.toBlob(function (b) {
         var a = document.createElement('a');
         a.href = URL.createObjectURL(b); a.download = filename;
         document.body.appendChild(a); a.click();
-        setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(a.href); }, 1000);
+        setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(a.href); }, 800);
         URL.revokeObjectURL(url);
       }, 'image/png');
     };
@@ -132,677 +137,1125 @@
     img.src = url;
   }
 
-  // ---------- 排序 / 行键 ----------
-  function rowKey(mod, r) {
-    return mod + '|' + (r.anchor || r.name || r.date || JSON.stringify(r));
+  // ---------- 通用组件 ----------
+  function viewHead(title, sub, actions) {
+    return '<div class="view-head"><div><div class="view-title">' + esc(title) + '</div>' +
+      '<div class="view-sub">' + sub + '</div></div>' +
+      (actions ? '<div class="view-actions">' + actions + '</div>' : '') + '</div>';
+  }
+  function kpiCards(list) {
+    var colors = ['#2f6fed', '#7a5cff', '#12a76c', '#f5871f', '#e5484d'];
+    return '<div class="kpi-row">' + (list || []).map(function (k, i) {
+      var c = k.color || colors[i % colors.length];
+      var val = k.value, unit = k.unit || '';
+      if (k.money != null) {
+        var p = amountParts(k.money);
+        val = p.value; unit = p.unit;
+      }
+      var spark = k.spark ? '<div class="kpi-spark">' + CH.spark(k.spark, { color: c }) + '</div>' : '';
+      return '<div class="kpi-card">' +
+        '<div class="kpi-icon" style="background:' + c + '">' + icon(k.icon || 'home') + '</div>' +
+        '<div class="kpi-body"><div class="k-title">' + esc(k.title) + '</div>' +
+        '<div class="k-val">' + esc(val) + '<span class="unit">' + esc(unit) + '</span></div>' +
+        '<div class="k-sub">' + (k.sub || '') + '</div></div>' + spark + '</div>';
+    }).join('') + '</div>';
+  }
+  function panel(title, sub, body, tools, cls) {
+    return '<div class="panel ' + (cls || '') + '"><div class="panel-head"><div class="ph-title">' + esc(title) +
+      (sub ? ' <span class="ph-sub">' + esc(sub) + '</span>' : '') + '</div>' +
+      (tools ? '<div class="ph-tools">' + tools + '</div>' : '') + '</div>' + body + '</div>';
+  }
+  function chartPanel(title, sub, svg, opts) {
+    opts = opts || {};
+    return '<div class="panel chart-panel"><div class="panel-head"><div class="ph-title">' + esc(title) +
+      (sub ? ' <span class="ph-sub">' + esc(sub) + '</span>' : '') + '</div>' +
+      '<div class="ph-tools"><button class="tbtn sm" data-role="img">导出图片</button></div></div>' +
+      (opts.legend || '') + svg + '</div>';
+  }
+
+  // ---------- 表格（分页 + 排序 + 搜索） ----------
+  function rowKey(mod, r, i) {
+    return mod + '|' + (r.anchor || r.name || r.sheet || r.date || r.month || i);
   }
   function sortRows(rows, key, dir, cols) {
     var col = null;
     for (var i = 0; i < cols.length; i++) if (cols[i].key === key) col = cols[i];
-    var numeric = col && (col.cls === 'mono' || col.numeric);
+    var numeric = col && (col.cls === 'mono' || col.num);
     var arr = rows.slice();
     arr.sort(function (a, b) {
       var x = a[key], y = b[key];
-      if (numeric) { x = parseFloat(x) || 0; y = parseFloat(y) || 0; return dir === 'asc' ? x - y : y - x; }
+      if (numeric) { x = num(x); y = num(y); return dir === 'asc' ? x - y : y - x; }
       x = String(x == null ? '' : x); y = String(y == null ? '' : y);
       return dir === 'asc' ? x.localeCompare(y, 'zh') : y.localeCompare(x, 'zh');
     });
     return arr;
   }
-  // 月份筛选：仅过滤带 .month 字段的项
-  function filterMonth(items, mod) {
-    var mm = state.month[mod] || '全部';
-    if (mm === '全部') return items;
-    return items.filter(function (it) { return !it.month || it.month === mm; });
+
+  // 过滤 + 排序 + 分页
+  function tableState(mod, cols, rows, opts) {
+    var list = rows.slice();
+    var q = (state.search[mod] || '').trim().toLowerCase();
+    if (q) {
+      list = list.filter(function (r) {
+        return cols.some(function (c) {
+          return String(r[c.key] == null ? '' : r[c.key]).toLowerCase().indexOf(q) >= 0;
+        });
+      });
+    }
+    var sk = state.sort[mod];
+    if (sk) list = sortRows(list, sk.key, sk.dir, cols);
+    var size = state.pageSize[mod] || opts.pageSize || 20;
+    var total = list.length;
+    var pages = Math.max(1, Math.ceil(total / size));
+    var pg = Math.min(Math.max(1, state.page[mod] || 1), pages);
+    state.page[mod] = pg;
+    return { all: list, total: total, pages: pages, page: pg, size: size, rows: list.slice((pg - 1) * size, pg * size) };
   }
 
-  // ---------- KPI / 图表面板 ----------
-  function kpiRow(kpis) {
-    var colors = ['#ff7aa8', '#7a5cff', '#2f6fed', '#2bbf7a', '#ff8c3b'];
-    return '<div class="kpi-row">' + (kpis || []).map(function (k, i) {
-      var c = colors[i % colors.length];
-      return '<div class="kpi-card">' +
-        '<div class="kpi-icon" style="background:' + c + '">' + (ICONS[k.title] ? icon(k.title) : icon('home')) + '</div>' +
-        '<div class="kpi-body"><div class="k-title">' + esc(k.title) + '</div>' +
-        '<div class="k-val">' + esc(k.value) + '<span class="unit">' + esc(k.unit || '') + '</span></div>' +
-        '<div class="k-sub"><span class="tag ' + trendCls(k.trend) + '">' + trendArrow(k.trend) + '</span> ' + esc(k.sub || '') + '</div>' +
-        '</div></div>';
-    }).join('') + '</div>';
-  }
-  function chartPanel(title, sub, svg) {
-    return '<div class="panel chart-panel"><div class="panel-head"><div class="ph-title">' + esc(title) + '</div>' +
-      '<div class="ph-tools"><button class="tbtn" data-role="img">图片</button></div></div>' +
-      (sub ? '<div class="ph-sub">' + esc(sub) + '</div>' : '') + (svg || '') + '</div>';
-  }
-  function monthBar(mod) {
-    var mm = state.month[mod] || '全部';
-    return '<div class="tbl-tools"><span class="tlabel">月份：</span><select class="tselect" data-role="month" data-mod="' + mod + '">' +
-      ['全部', '10月', '11月'].map(function (m) { return '<option' + (mm === m ? ' selected' : '') + '>' + m + '</option>'; }).join('') +
-      '</select><span class="tcount">选择月份可筛选对应周期数据</span></div>';
+  function pagerHtml(mod, st) {
+    if (st.pages <= 1 && st.total <= st.size) {
+      return '<div class="pager"><span class="pg-info">共 ' + st.total + ' 条</span></div>';
+    }
+    var out = '<div class="pager"><span class="pg-info">共 ' + st.total + ' 条 · 第 ' + st.page + '/' + st.pages + ' 页</span>';
+    out += '<button class="pg" data-pg="' + (st.page - 1) + '"' + (st.page <= 1 ? ' disabled' : '') + '>‹</button>';
+    var start = Math.max(1, st.page - 2), end = Math.min(st.pages, start + 4);
+    start = Math.max(1, end - 4);
+    if (start > 1) out += '<button class="pg" data-pg="1">1</button>' + (start > 2 ? '<span class="pg-info">…</span>' : '');
+    for (var i = start; i <= end; i++) {
+      out += '<button class="pg' + (i === st.page ? ' on' : '') + '" data-pg="' + i + '">' + i + '</button>';
+    }
+    if (end < st.pages) out += (end < st.pages - 1 ? '<span class="pg-info">…</span>' : '') + '<button class="pg" data-pg="' + st.pages + '">' + st.pages + '</button>';
+    out += '<button class="pg" data-pg="' + (st.page + 1) + '"' + (st.page >= st.pages ? ' disabled' : '') + '>›</button>';
+    out += '</div>';
+    return out;
   }
 
-  // ---------- 通用数据表（含工具条：导出/导入/月份/搜索/排序/置顶）----------
-  function dataTable(moduleKey, columns, rows, opts) {
+  function cellHtml(c, r, idx) {
+    if (c.render) return '<td class="' + (c.cls || '') + '">' + c.render(r, idx) + '</td>';
+    if (c.tag === 'status') return '<td>' + statusTag(r[c.key]) + '</td>';
+    if (c.fmt) return '<td class="' + (c.cls || '') + '">' + c.fmt(r[c.key], r) + '</td>';
+    return '<td class="' + (c.cls || '') + '">' + esc(r[c.key]) + '</td>';
+  }
+
+  // 只渲染表体（供局部刷新，避免整页重绘丢焦点）
+  function buildTableInner(mod, cols, rows, opts) {
+    var st = tableState(mod, cols, rows, opts);
+    var sk = state.sort[mod];
+    var head = '<tr>' + cols.map(function (c) {
+      var ind = (sk && sk.key === c.key) ? (sk.dir === 'asc' ? ' <span style="color:#2f6fed">▲</span>' : ' <span style="color:#2f6fed">▼</span>') : '';
+      var cls = 'sortable' + (c.cls === 'mono' ? ' num' : '');
+      return '<th class="' + cls + '" data-col="' + c.key + '">' + esc(c.label) + ind + '</th>';
+    }).join('') + '</tr>';
+
+    var body = st.rows.map(function (r, i) {
+      var globalIdx = (st.page - 1) * st.size + i;
+      var clickable = opts.onRow ? ' drow' : '';
+      return '<tr class="' + clickable + '" data-row="' + globalIdx + '">' +
+        cols.map(function (c) { return cellHtml(c, r, globalIdx); }).join('') + '</tr>';
+    }).join('');
+
+    return '<div class="tbl-wrap"><table class="tbl"><thead>' + head + '</thead><tbody>' +
+      (body || '<tr><td colspan="' + cols.length + '" class="empty">' + esc(opts.empty || '暂无数据') + '</td></tr>') +
+      '</tbody></table></div>' + pagerHtml(mod, st);
+  }
+
+  function dataTable(mod, cols, rows, opts) {
     opts = opts || {};
-    var base = (state.overrides[moduleKey] && state.overrides[moduleKey].rows) ? state.overrides[moduleKey].rows : rows;
-    var mm = state.month[moduleKey] || '全部';
-    var filtered = base.filter(function (r) { return mm === '全部' || !r.month || r.month === mm; });
-    var q = (state.search[moduleKey] || '').trim().toLowerCase();
-    if (q) filtered = filtered.filter(function (r) {
-      return columns.some(function (c) { return String(r[c.key] == null ? '' : r[c.key]).toLowerCase().indexOf(q) >= 0; });
-    });
-    var sk = state.sort[moduleKey];
-    if (sk) filtered = sortRows(filtered, sk.key, sk.dir, columns);
-    var pinSet = state.pin[moduleKey] || {};
-    var pinned = [], rest = [];
-    filtered.forEach(function (r) { if (pinSet[rowKey(moduleKey, r)]) pinned.push(r); else rest.push(r); });
-    filtered = pinned.concat(rest);
+    state.tableMeta[mod] = { cols: cols, rows: rows, opts: opts };
 
-    state.lastTable[moduleKey] = { columns: columns, rows: filtered, name: opts.exportName || moduleKey };
-
-    // 工具条
     var tools = '<div class="tbl-tools">';
-    if (opts.exportName) tools += '<button class="tbtn primary" data-role="export" data-mod="' + moduleKey + '">导出Excel</button>';
-    if (opts.month) tools += '<span class="tlabel">月份：</span><select class="tselect" data-role="month" data-mod="' + moduleKey + '">' +
-      ['全部', '10月', '11月'].map(function (m) { return '<option' + (mm === m ? ' selected' : '') + '>' + m + '</option>'; }).join('') + '</select>';
-    tools += '<span class="tlabel">搜索：</span><input class="tinput" data-role="search" data-mod="' + moduleKey + '" value="' + esc(state.search[moduleKey] || '') + '" placeholder="搜索..."/>';
-    if (Object.keys(pinSet).length) tools += '<button class="tbtn ghost" data-role="unpin" data-mod="' + moduleKey + '">取消置顶</button>';
-    tools += '<span class="tcount">共 ' + filtered.length + ' 条</span>';
+    if (opts.exportName) tools += '<button class="tbtn" data-role="export" data-mod="' + mod + '">导出 CSV</button>';
+    tools += '<span class="tlabel">搜索</span><input class="tinput" data-role="search" data-mod="' + mod +
+      '" value="' + esc(state.search[mod] || '') + '" placeholder="' + esc(opts.searchPlaceholder || '输入关键词筛选…') + '"/>';
+    tools += '<span class="tlabel">每页</span><select class="tselect" data-role="pagesize" data-mod="' + mod + '">' +
+      [10, 20, 50, 100].map(function (n) {
+        return '<option value="' + n + '"' + ((state.pageSize[mod] || opts.pageSize || 20) === n ? ' selected' : '') + '>' + n + '</option>';
+      }).join('') + '</select>';
+    if (opts.extraTools) tools += opts.extraTools;
     tools += '</div>';
 
-    // 表头
-    var head = '<tr>' + columns.map(function (c) {
-      var ind = (sk && sk.key === c.key) ? (sk.dir === 'asc' ? ' ▲' : ' ▼') : '';
-      var cls = c.sortable === false ? '' : ' class="sortable" data-col="' + c.key + '"';
-      return '<th' + cls + '>' + esc(c.label) + ind + '</th>';
-    }).join('') + '</tr>';
-    var body = filtered.map(function (r) {
-      var pinned = pinSet[rowKey(moduleKey, r)] ? ' pinned' : '';
-      return '<tr class="drow' + pinned + '">' + columns.map(function (c) {
-        var v = r[c.key];
-        if (c.tag === 'status') return '<td>' + statusTag(v) + '</td>';
-        if (c.cls) return '<td class="' + c.cls + '">' + esc(v) + '</td>';
-        return '<td>' + esc(v) + '</td>';
-      }).join('') + '</tr>';
-    }).join('');
-    return tools + '<div class="tbl-wrap"><table class="tbl" data-mod="' + moduleKey + '"><thead>' + head + '</thead><tbody>' +
-      (body || '<tr><td colspan="' + columns.length + '" class="empty">暂无数据</td></tr>') + '</tbody></table></div>';
+    return '<div class="tbl-block" data-block="' + mod + '">' + tools +
+      '<div data-tblroot="' + mod + '">' + buildTableInner(mod, cols, rows, opts) + '</div></div>';
   }
 
-  // ---------- 通用：真实数据全列展示（兜底，保证无论列名是否匹配都能看见数据）----------
-  function sourceLabel(src) {
-    if (src === 'cloud') return '数据来源：云数据库（实时同步）';
-    if (src === 'wps') return '数据来源：WPS 实时（直连）';
-    if (src === 'csv') return '数据来源：WPS 导出文件（手动更新）';
-    return '数据来源：示例数据';
+  // 局部刷新某张表（搜索/分页/排序时调用）
+  function refreshTable(mod, resetPage) {
+    var meta = state.tableMeta[mod];
+    if (!meta) return;
+    if (resetPage) state.page[mod] = 1;
+    var el = document.querySelector('[data-tblroot="' + mod + '"]');
+    if (el) el.innerHTML = buildTableInner(mod, meta.cols, meta.rows, meta.opts);
   }
-  function genericTable(moduleKey, rawHeaders, rawRows, opts) {
-    opts = opts || {};
-    if (!rawHeaders || !rawHeaders.length) return '';
-    var cols = rawHeaders.map(function (h) { return { key: h, label: h }; });
-    var rows = (rawRows || []).map(function (r) {
-      var o = {}; rawHeaders.forEach(function (h) { o[h] = (r[h] == null ? '' : r[h]); }); return o;
-    });
-    return '<div class="panel"><div class="panel-head"><div class="ph-title">' + esc(opts.title || '真实数据（来自 WPS 导出）') + '</div>' +
-      '<div class="ph-sub">共 ' + rows.length + ' 行 · 点击表头排序、点击行可置顶、上方搜索可筛选</div></div>' +
-      dataTable(moduleKey + '_raw', cols, rows, { exportName: (opts.exportName || moduleKey) + '_真实' }) + '</div>';
+
+  // ---------- 洞察卡 ----------
+  function insightCards(list) {
+    if (!list || !list.length) return '<div class="empty">暂无洞察</div>';
+    return '<div class="insight-grid">' + list.map(function (it, i) {
+      return '<div class="insight ' + it.level + '" data-insight="' + i + '">' +
+        '<div class="insight-top"><span class="insight-tag">' + esc(it.tag) + '</span>' +
+        (it.metric ? '<span class="insight-metric">' + esc(it.metric) + '</span>' : '') + '</div>' +
+        '<div class="insight-title">' + esc(it.title) + '</div>' +
+        '<div class="insight-detail">' + esc(it.detail) + '</div>' +
+        (it.action ? '<div class="insight-go">查看明细 →</div>' : '') + '</div>';
+    }).join('') + '</div>';
   }
-  // 模块内容容器：有真实原始数据优先展示真实全列表；否则展示结构化看板（示例或已命中字段映射）
-  function moduleBody(key, m, structuredHtml) {
-    var html = '';
-    if (m.kpis && m.kpis.length) html += kpiRow(m.kpis);
-    if (m.rawHeaders && m.rawHeaders.length) {
-      html += genericTable(key, m.rawHeaders, m.rawRows, { title: (m.title || '真实数据'), exportName: key });
-    } else {
-      html += structuredHtml;
+
+  // ---------- 首页：经营驾驶舱 ----------
+  function viewHome() {
+    var d = modules();
+    var rank = d.anchorRank || {};
+    var comm = d.commodity || {};
+    var rows = (rank.rows || []).filter(function (r) { return r.anchor; });
+    var s = rank.summary || {};
+
+    if (!rows.length) {
+      return viewHead('经营驾驶舱', '等待数据接入') +
+        panel('暂无数据', '', '<div class="empty">同步助手还没有把结算工作簿写进云库。确认助手在运行后，点击右上角「立即刷新」。</div>');
     }
-    html += uploadBtn(key);
+
+    var series = IN.activeDays(IN.dailySeries(rows), 'gmv');
+    var sparkVals = series.map(function (x) { return x.gmv; });
+    var cur = series.length ? series[series.length - 1].gmv : 0;
+    var prev = series.length > 1 ? series[series.length - 2].gmv : 0;
+    var dod = prev > 0 ? ((cur - prev) / prev) * 100 : 0;
+    var activeAnchors = rows.filter(function (r) { return num(r.gmvCum) > 0; }).length;
+    var totalGmv = num(s.gmvCum) || sparkVals.reduce(function (a, b) { return a + b; }, 0);
+
+    var html = viewHead('经营驾驶舱',
+      (rank.asOf ? '数据截止 <b>' + esc(rank.asOf) + '</b> · ' : '') +
+      rows.length + ' 位主播在册，' + activeAnchors + ' 位本期有产出 · ' + sourceLabel(rank.source),
+      '<span class="fresh-dot"><i></i>每 60 秒自动刷新</span>' +
+      '<button class="tbtn" onclick="window.__refresh()">立即刷新</button>');
+
+    // KPI
+    html += kpiCards([
+      { icon: 'gmv', color: '#2f6fed', title: '累计下播 GMV', money: totalGmv, sub: '本月累计 · ' + activeAnchors + ' 位有产出', spark: sparkVals },
+      { icon: 'anchorPerformance', color: '#7a5cff', title: '当日 GMV', money: cur, sub: deltaHtml(dod) + ' 较前一日', spark: sparkVals.slice(-4) },
+      { icon: 'settle', color: '#12a76c', title: '预估结算 GMV', money: s.settleCum, sub: '整体结算率 ' + pct1(s.calcRate) },
+      { icon: 'rate', color: '#f5871f', title: '平均结算率', value: pct1(s.avgRate), unit: '', sub: '按主播算术平均' }
+    ]);
+
+    // 趋势
+    var trendSvg = CH.line(series.map(function (x) { return { label: x.label, value: wanNum(x.gmv) }; }), {
+      color: '#2f6fed', height: 250, fmt: function (v) { return v + '万'; }, showValue: series.length <= 8
+    });
+
+    var byCum = rows.slice().sort(function (a, b) { return num(b.gmvCum) - num(a.gmvCum); });
+    var mv = IN.movers(rows);
+    var rated = rows.filter(function (r) { return num(r.gmvCum) > 0 && num(r.rate) > 0; });
+    var avgRate = rated.length ? rated.reduce(function (a, r) { return a + num(r.rate); }, 0) / rated.length : 0;
+    var watch = rated.slice().sort(function (a, b) { return num(a.rate) - num(b.rate); }).slice(0, 5);
+
+    function rankRow(r, i, right, rightColor) {
+      return '<div class="list-item"><div style="display:flex;align-items:center;gap:9px;min-width:0">' +
+        '<span class="rank-badge ' + (i < 3 ? 'g' + (i + 1) : '') + '">' + (i + 1) + '</span>' +
+        '<div style="min-width:0"><div class="li-name">' + esc(r.anchor) + '</div>' +
+        '<div class="li-meta">' + esc(r.org || '') + (r.type ? ' · ' + esc(r.type) : '') + '</div></div></div>' +
+        '<span class="pill" style="color:' + (rightColor || '#101828') + ';font-weight:700;white-space:nowrap">' + right + '</span></div>';
+    }
+
+    html += '<div class="grid-2">';
+    html += '<div class="panel chart-panel"><div class="panel-head"><div class="ph-title">每日 GMV 走势 <span class="ph-sub">全员合计 · 万元</span></div>' +
+      '<div class="ph-tools"><button class="tbtn sm" data-role="img">导出图片</button></div></div>' +
+      '<div class="legend"><span><i style="background:#2f6fed"></i>日 GMV</span><span>峰值 ' + wan(Math.max.apply(null, sparkVals)) + ' 万</span><span>均值 ' +
+      wan(sparkVals.reduce(function (a, b) { return a + b; }, 0) / (sparkVals.length || 1)) + ' 万</span></div>' + trendSvg + '</div>';
+
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">累计 GMV 排行</div>' +
+      '<div class="ph-tools"><button class="tbtn sm" data-goto="anchorRank">查看全部</button></div></div>' +
+      byCum.slice(0, 6).map(function (r, i) { return rankRow(r, i, wan(r.gmvCum) + ' 万'); }).join('') + '</div>';
+    html += '</div>';
+
+    // 智能洞察（全宽）
+    var cards = IN.build(d);
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">智能洞察 <span class="ph-sub">基于当前数据自动计算 · ' + cards.length + ' 条</span></div></div>' +
+      insightCards(cards) + '</div>';
+
+    // 增长 / 关注
+    html += '<div class="grid-2b">';
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">增长最快</div><span class="ph-sub">较前一日 GMV</span></div>' +
+      (mv.risers.length ? mv.risers.slice(0, 5).map(function (r, i) {
+        return rankRow(r, i, '+' + wan(r.delta) + ' 万', '#12a76c');
+      }).join('') : '<div class="empty">本期无明显增长</div>') + '</div>';
+
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">需要关注</div><span class="ph-sub">结算率由低到高</span></div>' +
+      (watch.length ? watch.map(function (r, i) {
+        return rankRow(r, i, pct1(r.rate), num(r.rate) < avgRate * 0.7 ? '#e5484d' : '#f5871f');
+      }).join('') : '<div class="empty">暂无数据</div>') + '</div>';
+    html += '</div>';
+
+    // 类目结构
+    var cats = (comm.categories || []).slice().sort(function (a, b) { return num(b.pay) - num(a.pay); }).slice(0, 7);
+    if (cats.length) {
+      var catTotal = num((comm.total || {}).pay) || 1;
+      var ringItems = cats.map(function (c, i) { return { label: c.name, value: num(c.pay), color: CH.PALETTE[i % CH.PALETTE.length] }; });
+      var legend = cats.map(function (c, i) {
+        return '<div class="legend-row"><span class="lr-name"><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:' +
+          CH.PALETTE[i % CH.PALETTE.length] + '"></i>' + esc(c.name.length > 16 ? c.name.slice(0, 16) + '…' : c.name) + '</span>' +
+          '<span class="lr-val">' + pct1((num(c.pay) / catTotal) * 100) + '</span></div>';
+      }).join('');
+      var catParts = amountParts(catTotal);
+      html += '<div class="grid-2b">';
+      html += '<div class="panel"><div class="panel-head"><div class="ph-title">支付 GMV 类目结构 <span class="ph-sub">TOP 7</span></div></div>' +
+        '<div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap">' +
+        CH.donutChart(ringItems, { size: 190, centerTop: catParts.value, centerSub: '支付 GMV(' + catParts.unit + ')' }) +
+        '<div style="flex:1;min-width:180px">' + legend + '</div></div></div>';
+
+      var scPoints = (comm.categories || []).map(function (c) {
+        return {
+          x: num(c.pay) / 10000, y: num(c.rate), label: c.name,
+          r: Math.max(4, Math.min(13, Math.sqrt(num(c.pay) / 1e7) * 3.2)),
+          color: num(c.rate) < num((comm.total || {}).rate) * 0.7 ? '#e5484d' : '#2f6fed'
+        };
+      });
+      html += chartPanel('类目：规模 vs 结算率', '越靠右下规模越大 · 越靠上结算率越高',
+        CH.scatter(scPoints, { height: 300, xLabel: '支付GMV(万)', yLabel: '结算率(%)', yAvg: num((comm.total || {}).rate) }));
+      html += '</div>';
+    }
+
     return html;
   }
-  function uploadBtn(key) {
-    return '<div style="margin-top:12px"><button class="tbtn" data-role="upload" data-mod="' + key + '">⬆ 上传该模块数据(CSV)</button>' +
-      '<span class="tcount" style="margin-left:10px">将 WPS 表格「导出为 CSV」后上传，立即生效（无需重新部署）</span></div>';
+
+  // ---------- 主播榜单 ----------
+  function viewAnchorRank() {
+    var m = modules().anchorRank || {};
+    var rows = (m.rows || []).filter(function (r) { return r.anchor; });
+    var s = m.summary || {};
+    if (!rows.length) return viewHead('主播榜单', '暂无数据') + panel('', '', '<div class="empty">暂无主播数据</div>');
+
+    var f = state.filter.anchorRank || 'all';
+    var list = rows.slice();
+    if (f === 'active') list = list.filter(function (r) { return num(r.gmvCum) > 0; });
+    if (f === 'idle') list = list.filter(function (r) { return num(r.gmvCum) <= 0; });
+    var rated = rows.filter(function (r) { return num(r.gmvCum) > 0 && num(r.rate) > 0; });
+    var avgRate = rated.length ? rated.reduce(function (a, r) { return a + num(r.rate); }, 0) / rated.length : 0;
+    if (f === 'lowRate') list = list.filter(function (r) { return num(r.gmvCum) > 0 && num(r.rate) > 0 && num(r.rate) < avgRate * 0.7; });
+
+    var html = viewHead('主播榜单',
+      (m.asOf ? '数据截止 <b>' + esc(m.asOf) + '</b> · ' : '') + rows.length + ' 位主播 · ' + sourceLabel(m.source),
+      '<button class="tbtn" data-role="export-rank">导出全部</button>');
+
+    // 默认按累计 GMV 降序，避免零产出主播排在最前面
+    if (!state.sort.anchorRank) state.sort.anchorRank = { key: 'gmvCum', dir: 'desc' };
+
+    html += kpiCards([
+      { icon: 'gmv', color: '#2f6fed', title: '累计 GMV', money: s.gmvCum, sub: '全部主播合计' },
+      { icon: 'anchorPerformance', color: '#7a5cff', title: '当日 GMV', money: s.gmvToday, sub: '最新一日' },
+      { icon: 'settle', color: '#12a76c', title: '预估结算', money: s.settleCum, sub: '风控后口径' },
+      { icon: 'rate', color: '#f5871f', title: '平均结算率', value: pct1(s.avgRate), unit: '', sub: '整体 ' + pct1(s.calcRate) }
+    ]);
+
+    // 筛选条
+    var chips = [['all', '全部'], ['active', '有产出'], ['idle', '零产出'], ['lowRate', '低结算率']];
+    html += '<div class="panel tight"><div class="chips">' + chips.map(function (c) {
+      return '<button class="chip-btn' + (f === c[0] ? ' on' : '') + '" data-filter="' + c[0] + '">' + c[1] + '</button>';
+    }).join('') + '<span class="tcount" style="margin-left:auto">当前 ' + list.length + ' 位</span></div></div>';
+
+    // 图：Top10 + 散点
+    var byCum = list.slice().sort(function (a, b) { return num(b.gmvCum) - num(a.gmvCum); }).slice(0, 10);
+    if (byCum.length) {
+      html += '<div class="grid-2">';
+      html += chartPanel('累计 GMV Top 10', '万元', CH.hBars(byCum.map(function (r) {
+        return { label: r.anchor, value: wanNum(r.gmvCum) };
+      }), { unit: ' 万', labelW: 90, fmt: function (v) { return v + '万'; } }));
+      var pts = list.filter(function (r) { return num(r.gmvCum) > 0; }).map(function (r) {
+        return {
+          x: wanNum(r.gmvCum), y: num(r.rate), label: r.anchor,
+          r: 5, color: num(r.rate) < avgRate * 0.7 ? '#e5484d' : '#2bbf7a'
+        };
+      });
+      html += chartPanel('规模 vs 结算率', '红点=结算率明显低于均值', CH.scatter(pts, {
+        height: 300, xLabel: '累计GMV(万)', yLabel: '结算率(%)', yAvg: avgRate
+      }));
+      html += '</div>';
+    }
+
+    // 主表
+    var baseRate = num(s.calcRate) || avgRate;   // 整体口径更适合做色阶基准
+    var cols = [
+      { key: 'rank', label: '#', cls: 'mono', render: function (r, i) { return i + 1; } },
+      { key: 'anchor', label: '主播', render: function (r) { return '<b>' + esc(r.anchor) + '</b>'; } },
+      { key: 'org', label: '所属公司' },
+      { key: 'type', label: '类型' },
+      { key: 'gmv', label: '当日GMV(万)', cls: 'mono', render: function (r) { return wan(r.gmv); } },
+      { key: 'gmvCum', label: '累计GMV(万)', cls: 'mono', render: function (r) { return wan(r.gmvCum); } },
+      {
+        key: 'trend', label: '近 4 日走势', render: function (r) {
+          return CH.spark((r.daily || []).slice(0, 4), { w: 74, h: 22, color: '#2f6fed' });
+        }
+      },
+      {
+        key: 'rate', label: '结算率', cls: 'mono', render: function (r) {
+          var v = num(r.rate);
+          var col = v >= baseRate ? '#12a76c' : v >= baseRate * 0.75 ? '#f5871f' : '#e5484d';
+          var bar = v > 0
+            ? '<span class="rate-bar"><i style="width:' + Math.max(3, Math.min(100, v)) + '%;background:' + col + '"></i></span>'
+            : '';
+          return '<div class="rate-cell"><span>' + (v > 0 ? pct1(v) : '—') + '</span>' + bar + '</div>';
+        }
+      },
+      { key: 'settleCum', label: '结算GMV(万)', cls: 'mono', render: function (r) { return wan(r.settleCum); } }
+    ];
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">主播明细</div>' +
+      '<span class="ph-sub">点击任意一行查看 30 天走势</span></div>' +
+      dataTable('anchorRank', cols, list, {
+        exportName: '主播榜单', pageSize: 20, empty: '当前筛选下没有主播',
+        onRow: function (r) { openAnchor(r.anchor); }
+      }) + '</div>';
+
+    if (m.rawHeaders && m.rawHeaders.length) {
+      html += '<div class="panel"><div class="panel-head"><div class="ph-title">原始汇总表</div>' +
+        '<span class="ph-sub">' + m.rawHeaders.length + ' 列 · ' + (m.rawRows || []).length + ' 行</span></div>' +
+        dataTable('anchorRank_raw', m.rawHeaders.map(function (h) { return { key: h, label: h }; }), m.rawRows || [], {
+          exportName: '主播榜单_原始', pageSize: 20
+        }) + '</div>';
+    }
+    return html;
   }
 
-  // ---------- 各模块视图 ----------
-  var VIEWS = {
-    home: function (d) {
-      var h = d.home || {};
-      var asOf = h.asOf ? '数据截止 ' + h.asOf + ' · ' : '';
-      var html = '<div class="view-title">首页</div><div class="view-sub">核心经营总览 · ' + asOf + sourceLabel(h.source) + '</div>';
-      html += kpiRow(h.kpis);
-      html += '<div class="grid-2">';
-      var an = h.anomaly || {};
-      html += '<div class="panel"><div class="panel-head"><div class="ph-title">异常数据追踪</div><div class="ph-sub">更新于 ' + esc(an.updated || '-') + '</div></div>';
-      html += '<div class="empty">' + esc(an.note || '暂无记录') + '</div>';
-      if (an.bars && an.bars.length) html += chartPanel('日进度差异分布', '', window.chartHelpers.hBars(an.bars.map(function (b) { return { label: b.label, value: b.value, color: b.color }; }), { unit: ' 条' }));
-      html += '</div>';
-      html += '<div>';
-      html += '<div class="panel"><div class="panel-head"><div class="ph-title">通知公告</div></div>';
-      html += (h.notices || []).map(function (n) {
-        return '<div class="list-item"><div><div class="li-name">' + esc(n.title) + '</div><div class="li-meta">' + esc(n.time) + '</div></div><span class="tag ' + (n.level === 'warn' ? 'orange' : 'blue') + '">' + (n.level === 'warn' ? '重要' : '通知') + '</span></div>';
-      }).join('') + '</div>';
-      var ck = h.clock || {};
-      if (!ck.time) {
-        var now = new Date();
-        var wd = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][now.getDay()];
-        var last = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-        ck = {
-          time: ('0' + now.getHours()).slice(-2) + ':' + ('0' + now.getMinutes()).slice(-2),
-          weekday: (now.getMonth() + 1) + '月' + now.getDate() + '日 ' + wd,
-          daysLeft: last - now.getDate()
-        };
-      }
-      html += '<div class="panel clock-card"><div class="big">' + esc(ck.time || '--:--') + '</div><div class="wk">' + esc(ck.weekday || '') + '</div><div class="dl">距离月底还有 ' + esc(ck.daysLeft || '-') + ' 天</div></div>';
-      html += '</div>';
-      html += '</div>';
-      return html;
-    },
+  // ---------- 主播详情抽屉 ----------
+  function openAnchor(name) {
+    var rank = modules().anchorRank || {};
+    var rows = (rank.rows || []).filter(function (r) { return r.anchor; });
+    var r = rows.filter(function (x) { return x.anchor === name; })[0];
+    if (!r) return;
 
-    anchorRank: function (d) {
-      var m = d.anchorRank || {};
-      var rows = (m.rows || []).slice();
-      var s = m.summary || {};
-      var html = '<div class="view-title">主播榜单</div><div class="view-sub">' +
-        (s.anchors ? s.anchors + ' 位主播 · ' : '') +
-        (m.asOf ? '数据截止 ' + esc(m.asOf) + ' · ' : '') + sourceLabel(m.source) + '</div>';
+    var sorted = rows.slice().sort(function (a, b) { return num(b.gmvCum) - num(a.gmvCum); });
+    var rankNo = sorted.map(function (x) { return x.anchor; }).indexOf(name) + 1;
+    var rated = rows.filter(function (x) { return num(x.gmvCum) > 0 && num(x.rate) > 0; });
+    var avgRate = rated.length ? rated.reduce(function (a, x) { return a + num(x.rate); }, 0) / rated.length : 0;
+    var avgGmv = rows.reduce(function (a, x) { return a + num(x.gmvCum); }, 0) / (rows.length || 1);
 
-      if (s.anchors) {
-        html += kpiRow([
-          { title: '下播GMV累计', value: fmtWan(s.gmvCum), unit: '万', sub: '当日 ' + fmtWan(s.gmvToday) + ' 万', trend: 'flat' },
-          { title: '预估结算GMV', value: fmtWan(s.settleCum), unit: '万', sub: '累计口径', trend: 'up' },
-          { title: '平均结算率', value: s.avgRate, unit: '%', sub: '整体口径 ' + s.calcRate + '%', trend: 'up' },
-          { title: '在播主播', value: s.anchors, unit: '人', sub: '电商直播', trend: 'flat' }
-        ]);
-      }
+    var days = (r.daily || []).map(function (v, i) {
+      var rate = Number((r.rateDaily || [])[i]) || 0;
+      return { label: (i + 1) + '日', gmv: IN.dayGmv(v, rate), settle: num(v), rate: rate };
+    });
+    var activeDaily = days.filter(function (x) { return x.gmv > 0; });
+    var activeRate = activeDaily.filter(function (x) { return x.rate > 0; });
 
-      var byCum = rows.slice().sort(function (a, b) { return toNum(b.gmvCum) - toNum(a.gmvCum); }).slice(0, 10);
-      if (byCum.length) {
-        html += chartPanel('下播GMV累计 Top10（万元）', '', window.chartHelpers.hBars(
-          byCum.map(function (r) { return { label: r.anchor, value: wan(r.gmvCum) }; }), { unit: ' 万' }));
-      }
+    var body = '<div class="mini-kpis">' +
+      '<div class="mini-kpi"><div class="mk-label">累计下播 GMV</div><div class="mk-val">' + wan(r.gmvCum) + '<span style="font-size:12px;color:#7b8798"> 万</span></div><div class="mk-sub">全员平均 ' + wan(avgGmv) + ' 万</div></div>' +
+      '<div class="mini-kpi"><div class="mk-label">当日 GMV</div><div class="mk-val">' + wan(r.gmv) + '<span style="font-size:12px;color:#7b8798"> 万</span></div><div class="mk-sub">最新一日</div></div>' +
+      '<div class="mini-kpi"><div class="mk-label">结算率</div><div class="mk-val" style="color:' + (num(r.rate) >= avgRate ? '#12a76c' : '#e5484d') + '">' + pct1(r.rate) + '</div><div class="mk-sub">全员均值 ' + pct1(avgRate) + '</div></div>' +
+      '<div class="mini-kpi"><div class="mk-label">累计排名</div><div class="mk-val">NO.' + rankNo + '</div><div class="mk-sub">共 ' + rows.length + ' 位</div></div>' +
+      '</div>';
 
-      var byRate = rows.filter(function (r) { return toNum(r.gmvCum) > 0 && toNum(r.rate) > 0; })
-        .sort(function (a, b) { return toNum(b.rate) - toNum(a.rate); }).slice(0, 10);
-      if (byRate.length) {
-        html += chartPanel('结算率 Top10（%）', '仅统计已产生GMV的主播', window.chartHelpers.hBars(
-          byRate.map(function (r) { return { label: r.anchor, value: toNum(r.rate), color: '#2bbf7a' }; }), { unit: '%' }));
-      }
+    if (activeDaily.length >= 2) {
+      body += '<div class="sec-title">每日 GMV（万元）</div>' +
+        CH.line(activeDaily.map(function (x) { return { label: x.label, value: wanNum(x.gmv) }; }),
+          { color: '#2f6fed', height: 190, fmt: function (v) { return v + '万'; }, showValue: activeDaily.length <= 8 });
+    }
+    if (activeRate.length >= 2) {
+      body += '<div class="sec-title">每日结算率（%）</div>' +
+        CH.line(activeRate.map(function (x) { return { label: x.label, value: Math.round(x.rate * 10) / 10 }; }),
+          { color: '#12a76c', height: 170, fmt: function (v) { return v + '%'; }, showValue: activeRate.length <= 8 });
+    }
 
-      var cols = [
-        { key: 'rank', label: '排名', cls: 'mono' },
-        { key: 'anchor', label: '主播名' },
-        { key: 'org', label: '所属公司' },
-        { key: 'type', label: '类型' },
-        { key: 'gmv', label: '下播GMV(元)', cls: 'mono' },
-        { key: 'gmvCum', label: '下播GMV累计(元)', cls: 'mono' },
-        { key: 'settleCum', label: '预估结算GMV累计(元)', cls: 'mono' },
-        { key: 'rate', label: '结算率(%)', cls: 'mono' }
-      ];
-      html += '<div class="panel"><div class="panel-head"><div class="ph-title">主播销售明细（精选）</div>' +
-        '<div class="ph-sub">共 ' + rows.length + ' 位主播 · 点击表头排序、点击行可置顶</div></div>' +
-        dataTable('anchorRank', cols, rows, { exportName: '主播榜单_精选' }) + '</div>';
+    body += '<div class="sec-title">每日明细</div>' + dataTable('drawer_' + name, [
+      { key: 'day', label: '日期' },
+      { key: 'gmv', label: 'GMV(元)', cls: 'mono', render: function (x) { return money(x.gmv); } },
+      { key: 'settle', label: '结算GMV(元)', cls: 'mono', render: function (x) { return money(x.settle); } },
+      { key: 'rate', label: '结算率', cls: 'mono', render: function (x) { return x.rate > 0 ? pct1(x.rate) : '—'; } }
+    ], activeDaily.map(function (x) {
+      return { day: x.label, gmv: x.gmv, settle: x.settle, rate: x.rate };
+    }), { pageSize: 10, searchPlaceholder: '筛选日期…' });
 
-      if (m.rawHeaders && m.rawHeaders.length) {
-        html += genericTable('anchorRank', m.rawHeaders, m.rawRows, {
-          title: '原始汇总表（全部 ' + m.rawHeaders.length + ' 列）', exportName: '主播榜单'
-        });
-      }
-      html += uploadBtn('anchorRank');
-      return html;
-    },
+    $('drawerTitle').textContent = name;
+    $('drawerSub').textContent = (r.org || '') + (r.type ? ' · ' + r.type : '') + ' · 数据截止 ' + (rank.asOf || '--');
+    $('drawerBody').innerHTML = body;
+    $('drawerMask').classList.add('show');
+    $('drawer').classList.add('show');
+  }
+  function closeDrawer() {
+    $('drawerMask').classList.remove('show');
+    $('drawer').classList.remove('show');
+  }
 
-    commodity: function (d) {
-      var m = d.commodity || {};
-      var t = m.total || {};
-      var days = m.days || [];
-      var range = days.length ? (days[0].date + ' ~ ' + days[days.length - 1].date) : '';
-      var html = '<div class="view-title">商品结构</div><div class="view-sub">商品级明细聚合' +
-        (range ? ' · 明细区间 ' + esc(range) : '') + ' · ' + sourceLabel(m.source) + '</div>';
+  // ---------- 商品结构 ----------
+  function viewCommodity() {
+    var m = modules().commodity || {};
+    var t = m.total || {};
+    var cats = m.categories || [];
+    if (!cats.length && !(m.products || []).length) {
+      return viewHead('商品结构', '暂无数据') + panel('', '', '<div class="empty">商品明细尚未入库</div>');
+    }
+    var html = viewHead('商品结构',
+      '明细 ' + (t.items || 0).toLocaleString('zh-CN') + ' 行 · ' + cats.length + ' 个一级类目 · ' + ((m.products || []).length) + ' 个重点商品');
 
-      html += kpiRow([
-        { title: '商品明细', value: (t.items || 0).toLocaleString('zh-CN'), unit: '行', sub: '来自「数据来源」表', trend: 'flat' },
-        { title: '支付GMV', value: fmtWan(t.pay), unit: '万', sub: range || '全部商品', trend: 'flat' },
-        { title: '结算GMV', value: fmtWan(t.settle), unit: '万', sub: '风控后预估', trend: 'up' },
-        { title: '整体结算率', value: t.rate, unit: '%', sub: '结算 / 支付', trend: 'up' }
-      ]);
+    html += kpiCards([
+      { icon: 'commodity', color: '#2f6fed', title: '支付 GMV', money: t.pay, sub: '全部商品合计' },
+      { icon: 'settle', color: '#12a76c', title: '结算 GMV', money: t.settle, sub: '风控后' },
+      { icon: 'rate', color: '#f5871f', title: '整体结算率', value: pct1(t.rate), unit: '', sub: '结算 / 支付' },
+      { icon: 'gmv', color: '#7a5cff', title: '明细行数', value: (t.items || 0).toLocaleString('zh-CN'), unit: '行', sub: '商品级明细' }
+    ]);
 
-      if ((m.categories || []).length) {
-        html += chartPanel('一级类目 结算GMV 排行（万元）', '', window.chartHelpers.hBars(
-          m.categories.slice(0, 10).map(function (c) { return { label: c.name.length > 12 ? c.name.slice(0, 12) + '…' : c.name, value: wan(c.settle) }; }),
-          { unit: ' 万', labelW: 150 }));
-      }
-      if ((m.products || []).length) {
-        html += chartPanel('TOP 商品 结算GMV（万元）', '', window.chartHelpers.hBars(
-          m.products.slice(0, 10).map(function (p) { return { label: p.name.length > 14 ? p.name.slice(0, 14) + '…' : p.name, value: wan(p.settle), color: '#2bbf7a' }; }),
-          { unit: ' 万', labelW: 190 }));
-      }
-      if ((m.sellers || []).length) {
-        html += chartPanel('卖家/店铺 结算GMV（万元）', '', window.chartHelpers.hBars(
-          m.sellers.slice(0, 10).map(function (p) { return { label: p.name, value: wan(p.settle), color: '#ff8c3b' }; }),
-          { unit: ' 万', labelW: 150 }));
-      }
+    // 类目结构
+    var catSorted = cats.slice().sort(function (a, b) { return num(b.pay) - num(a.pay); });
+    var top = catSorted.slice(0, 8);
+    var ring = top.map(function (c, i) { return { label: c.name, value: num(c.pay), color: CH.PALETTE[i % CH.PALETTE.length] }; });
+    var legend = top.map(function (c, i) {
+      return '<div class="legend-row"><span class="lr-name"><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:' +
+        CH.PALETTE[i % CH.PALETTE.length] + '"></i>' + esc(c.name.length > 15 ? c.name.slice(0, 15) + '…' : c.name) + '</span>' +
+        '<span class="lr-val">' + wan(c.pay) + ' 万 · ' + pct1(c.rate) + '</span></div>';
+    }).join('');
 
-      var catRows = (m.categories || []).map(function (c) {
-        return { name: c.name, items: c.items, pay: fmtMoney(c.pay), settle: fmtMoney(c.settle), rate: c.rate };
-      });
-      html += '<div class="panel"><div class="panel-head"><div class="ph-title">类目明细</div>' +
-        '<div class="ph-sub">共 ' + catRows.length + ' 个一级类目</div></div>' +
-        dataTable('commodity', [
-          { key: 'name', label: '一级类目' },
-          { key: 'items', label: '商品行数', cls: 'mono' },
-          { key: 'pay', label: '支付GMV(元)', cls: 'mono' },
-          { key: 'settle', label: '结算GMV(元)', cls: 'mono' },
-          { key: 'rate', label: '结算率(%)', cls: 'mono' }
-        ], catRows, { exportName: '商品类目明细' }) + '</div>';
+    var payParts = amountParts(t.pay);
+    html += '<div class="grid-2b">';
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">支付 GMV 类目占比</div></div>' +
+      '<div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap">' +
+      CH.donutChart(ring, { size: 200, centerTop: payParts.value, centerSub: '支付 GMV(' + payParts.unit + ')' }) +
+      '<div style="flex:1;min-width:200px">' + legend + '</div></div></div>';
+    html += chartPanel('类目结算率对比', '整体 ' + pct1(t.rate) + '，低于此线的类目拉低了综合毛利',
+      CH.hBars(catSorted.map(function (c) {
+        return { label: c.name.length > 10 ? c.name.slice(0, 10) + '…' : c.name, value: num(c.rate), color: num(c.rate) < num(t.rate) * 0.7 ? '#e5484d' : '#12a76c' };
+      }).slice(0, 12), { unit: '%', labelW: 130, fmt: function (v) { return v.toFixed(1) + '%'; } }), {});
+    html += '</div>';
 
-      var prodRows = (m.products || []).map(function (p) {
-        return { name: p.name, cat: p.cat, seller: p.seller, pay: fmtMoney(p.pay), settle: fmtMoney(p.settle), rate: p.rate };
-      });
-      html += '<div class="panel"><div class="panel-head"><div class="ph-title">TOP 商品明细</div>' +
-        '<div class="ph-sub">按结算GMV 取前 ' + prodRows.length + ' 个商品</div></div>' +
-        dataTable('commodity_prod', [
-          { key: 'name', label: '商品名称' },
-          { key: 'cat', label: '一级类目' },
-          { key: 'seller', label: '店铺' },
-          { key: 'pay', label: '支付GMV(元)', cls: 'mono' },
-          { key: 'settle', label: '结算GMV(元)', cls: 'mono' },
-          { key: 'rate', label: '结算率(%)', cls: 'mono' }
-        ], prodRows, { exportName: 'TOP商品明细' }) + '</div>';
-
-      return html;
-    },
-
-    anchorPerformance: function (d) {
-      var m = d.anchorPerformance || {};
-      var html = '<div class="view-title">主播业绩</div><div class="view-sub">每日直播快照 · ' +
-        (m.asOf ? '数据截止 ' + esc(m.asOf) + ' · ' : '') + sourceLabel(m.source) + '</div>';
-
-      var sheets = m.sheets || [];
-      if (!sheets.length) {
-        // 兼容旧结构
-        var det = m.detail || {};
-        html += '<div class="panel"><div class="panel-head"><div class="ph-title">主播业绩明细</div></div>' +
-          dataTable('anchorPerformance', [
-            { key: 'date', label: '日期' }, { key: 'anchor', label: '主播' },
-            { key: 'est', label: '预估(万)', cls: 'mono' }, { key: 'actual', label: '实际(万)', cls: 'mono' },
-            { key: 'diff', label: '差额(万)', cls: 'mono' }, { key: 'rate', label: '差额率(%)', cls: 'mono' }
-          ], det.rows || [], { exportName: '主播业绩明细' }) + '</div>';
-        return html;
-      }
-
-      function pickCol(headers, names) {
-        for (var i = 0; i < names.length; i++) {
-          for (var j = 0; j < headers.length; j++) {
-            if (headers[j] === names[i]) return headers[j];
+    // 类目明细表
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">类目明细</div><span class="ph-sub">' + cats.length + ' 个类目</span></div>' +
+      dataTable('commodity_cat', [
+        { key: 'name', label: '一级类目' },
+        { key: 'items', label: '商品行数', cls: 'mono' },
+        { key: 'pay', label: '支付GMV(元)', cls: 'mono', render: function (r) { return money(r.pay); } },
+        { key: 'settle', label: '结算GMV(元)', cls: 'mono', render: function (r) { return money(r.settle); } },
+        {
+          key: 'rate', label: '结算率', cls: 'mono', render: function (r) {
+            var v = num(r.rate);
+            return '<div class="rate-cell"><span>' + pct1(v) + '</span><span class="rate-bar"><i style="width:' +
+              Math.max(2, Math.min(100, v)) + '%;background:' + (v >= num(t.rate) ? '#12a76c' : '#e5484d') + '"></i></span></div>';
           }
         }
-        return null;
-      }
+      ], cats, { exportName: '商品类目明细', pageSize: 20 }) + '</div>';
 
-      // 概览卡片
-      html += '<div class="grid-3">';
-      sheets.forEach(function (s) {
-        var cGmv = pickCol(s.headers, ['下播GMV']);
-        var cSet = pickCol(s.headers, ['风控后结算GMV(预估拼接)(元)', '风控后结算GMV(元)']);
-        var totG = 0, totS = 0;
-        (s.rows || []).forEach(function (r) {
-          if (cGmv) totG += toNum(r[cGmv]);
-          if (cSet) totS += toNum(r[cSet]);
-        });
-        html += '<div class="panel" style="text-align:center">' +
-          '<div class="k-title">' + esc(s.name) + ' 快照</div>' +
-          '<div class="k-val" style="margin-top:6px">' + fmtWan(totG) + '<span class="unit">万</span></div>' +
-          '<div class="k-sub" style="justify-content:center">下播GMV · ' + esc(s.date || '-') + '</div>' +
-          '<div style="margin-top:8px"><span class="tag green">结算 ' + fmtWan(totS) + ' 万</span> <span class="tag blue">' + (s.rows || []).length + ' 人</span></div>' +
-          '</div>';
-      });
-      html += '</div>';
+    // 商品 + 卖家
+    html += '<div class="grid-2b">';
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">重点商品 TOP</div><span class="ph-sub">按结算 GMV</span></div>' +
+      dataTable('commodity_prod', [
+        { key: 'name', label: '商品名称', render: function (r) { return '<span title="' + esc(r.name) + '">' + esc(r.name.length > 18 ? r.name.slice(0, 18) + '…' : r.name) + '</span>'; } },
+        { key: 'cat', label: '类目', render: function (r) { return esc(String(r.cat || '').slice(0, 8)); } },
+        { key: 'settle', label: '结算GMV(万)', cls: 'mono', render: function (r) { return wan(r.settle); } },
+        { key: 'rate', label: '结算率', cls: 'mono', render: function (r) { return pct1(r.rate); } }
+      ], m.products || [], { exportName: '重点商品', pageSize: 10, searchPlaceholder: '搜索商品…' }) + '</div>';
 
-      // 最新快照全表（其余快照可在「主播榜单」的原始表中查看）
-      var latest = sheets[sheets.length - 1];
-      html += genericTable('anchorPerformance', latest.headers, latest.rows, {
-        title: latest.name + ' 快照明细（' + latest.date + '，' + latest.headers.length + ' 列 / ' + latest.rows.length + ' 行）',
-        exportName: '主播业绩_' + latest.name
-      });
-      return html;
-    },
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">店铺 TOP</div><span class="ph-sub">按支付 GMV</span></div>' +
+      dataTable('commodity_seller', [
+        { key: 'name', label: '店铺', render: function (r) { return '<span title="' + esc(r.name) + '">' + esc(r.name.length > 16 ? r.name.slice(0, 16) + '…' : r.name) + '</span>'; } },
+        { key: 'items', label: '商品数', cls: 'mono' },
+        { key: 'pay', label: '支付GMV(万)', cls: 'mono', render: function (r) { return wan(r.pay); } },
+        { key: 'rate', label: '结算率', cls: 'mono', render: function (r) { return pct1(r.rate); } }
+      ], m.sellers || [], { exportName: '店铺榜单', pageSize: 10, searchPlaceholder: '搜索店铺…' }) + '</div>';
+    html += '</div>';
 
-    productInsight: function (d) {
-      var m = d.productInsight || {};
-      var html = '<div class="view-title">商品洞察</div><div class="view-sub">TOP 商品预警 · 数据来源：WPS共享表格（示例） · 自动识别高关注商品</div>';
-      html += monthBar('productInsight');
-      (m.topProducts || []).forEach(function (p) {
-        html += '<div class="warn-card"><div class="warn-head"><div class="badge">' + esc(p.badge) + '</div><div><div class="w-name">' + esc(p.name) + '</div><span class="tag orange">' + esc(p.tag) + '</span></div><div class="w-rate">' + esc(p.rate) + '%</div></div>';
-        var core = p.core || {};
-        html += '<div class="k-val" style="font-size:20px">' + esc(core.amount != null ? '¥' + core.amount.toLocaleString() : '-') + '</div>';
-        html += '<div class="chips"><span class="chip">价格预警 ' + esc((core.priceWarn || []).join('/')) + '</span><span class="chip">销售预警 ' + esc((core.saleWarn || []).join('/')) + '</span><span class="chip hl">利润预警 ' + esc(core.profitWarn != null ? core.profitWarn : '-') + '</span></div>';
-        var acols = [
-          { key: 'name', label: '商品名称' }, { key: 'category', label: '类目' }, { key: 'price', label: '价格', cls: 'mono' },
-          { key: 'sales', label: '当月销量', cls: 'mono' }, { key: 'amount', label: '当月销售额', cls: 'mono' },
-          { key: 'momVol', label: '环比销量', cls: 'mono' }, { key: 'momAmt', label: '环比销售额', cls: 'mono' }, { key: 'trend', label: '趋势率(%)', cls: 'mono' }
-        ];
-        var att = filterMonth(p.attention || [], 'productInsight');
-        html += '<div style="margin-top:12px"><div class="ph-sub" style="margin-bottom:8px;font-weight:600">高关注商品</div>' +
-          dataTable('productInsight_' + p.badge, acols, att, { exportName: p.name + '_高关注商品' }) + '</div>';
-        html += '</div>';
-      });
-      return html;
-    },
+    return html;
+  }
 
-    productData: function (d) {
-      var m = d.productData || {};
-      var html = '<div class="view-title">商品数据</div><div class="view-sub">商品全景分析 · 数据来源：WPS共享表格（示例） · 更新于 ' + esc(m.updated || '-') + '</div>';
-      html += monthBar('productData');
-      html += kpiRow(m.kpis);
-      html += '<div class="grid-2b">';
-      html += chartPanel('品类排行', '', window.chartHelpers.hBars(filterMonth(m.categoryRank || [], 'productData'), {}));
-      html += chartPanel('TOP 品类 GMV(万)', '', window.chartHelpers.hBars(filterMonth(m.topGmv || [], 'productData'), { unit: ' 万' }));
-      html += '</div>';
-      html += '<div class="grid-2b">';
-      html += chartPanel('热门搜索（近7天）', '', window.chartHelpers.hBars(filterMonth(m.hot || [], 'productData'), {}));
-      html += chartPanel('上升新星（近7天）', '', window.chartHelpers.hBars(filterMonth(m.rising || [], 'productData'), {}));
-      html += '</div>';
-      return html;
-    },
-
-    productDept: function (d) {
-      var m = d.productDept || {};
-      var html = '<div class="view-title">商品部</div><div class="view-sub">品类收益率与选品池 · 数据来源：WPS共享表格（示例）</div>';
-      html += monthBar('productDept');
-      html += kpiRow(m.kpis);
-      html += chartPanel('品类收益率对比', '绿色=收益率', window.chartHelpers.hBars(filterMonth((m.yieldByCategory || []).map(function (x) { return { label: x.category, value: x.yield, color: '#2bbf7a', month: x.month }; }), 'productDept'), { unit: '%' }));
-      var pools = m.pools || {};
-      html += '<div class="grid-3">';
-      html += poolPanel('优先池', 'green', pools.priority || [], '覆盖率 70%');
-      html += poolPanel('潜力', 'yellow', pools.potential || [], '覆盖率 12%');
-      html += poolPanel('提权/限流', 'red', pools.restrict || [], '覆盖率 0%');
-      html += '</div>';
-      return html;
-    },
-
-    rongpin: function (d) {
-      var m = d.rongpin || {};
-      var rank = d.anchorRank || {};
-      var daily = rank.daily || [];
-
-      if (daily.length) {
-        var s = rank.summary || {};
-        var active = daily.filter(function (x) { return toNum(x.settle) > 0; });
-        var html = '<div class="view-title">预估结算</div><div class="view-sub">11月每日预估结算进度 · ' +
-          (rank.asOf ? '数据截止 ' + esc(rank.asOf) + ' · ' : '') + sourceLabel(rank.source) + '</div>';
-
-        html += kpiRow([
-          { title: '预估结算GMV', value: fmtWan(s.settleCum), unit: '万', sub: '累计口径', trend: 'up' },
-          { title: '平均结算率', value: s.avgRate, unit: '%', sub: '整体 ' + s.calcRate + '%', trend: 'up' },
-          { title: '已出数据', value: active.length, unit: '天', sub: '本月累计', trend: 'flat' },
-          { title: '预计剩余', value: Math.max(0, 30 - active.length), unit: '天', sub: '1~30日口径', trend: 'flat' }
-        ]);
-
-        if (active.length) {
-          html += chartPanel('每日预估结算GMV（万元）', '仅统计已产生结算数据的天',
-            window.chartHelpers.hBars(active.map(function (x) {
-              return { label: x.day, value: wan(x.settle) };
-            }), { unit: ' 万' }));
-        }
-
-        var rows30 = daily.map(function (x) {
-          return { day: x.day, settle: fmtMoney(x.settle), rate: x.rate > 0 ? x.rate : '-' };
-        });
-        html += '<div class="panel"><div class="panel-head"><div class="ph-title">1~30 日预估结算明细</div>' +
-          '<div class="ph-sub">来自「汇总」页 预估结算GMV · 1日~30日</div></div>' +
-          dataTable('rongpin_daily', [
-            { key: 'day', label: '日期' },
-            { key: 'settle', label: '预估结算GMV(元)', cls: 'mono' },
-            { key: 'rate', label: '当日平均结算率(%)', cls: 'mono' }
-          ], rows30, { exportName: '预估结算_每日' }) + '</div>';
-        return html;
-      }
-
-      var out = '<div class="view-title">预估结算</div><div class="view-sub">预估结算明细（日更） · ' + sourceLabel(m.source) + ' · ' + esc(m.updated || '-') + '</div>';
-      var structured = '';
-      structured += '<div class="grid-2b">';
-      structured += chartPanel('融品预估结算GMV对比(万)', '', window.chartHelpers.vBars(
-        filterMonth((m.settlement || []).map(function (x) { return { label: x.name, value: x.value, month: x.month }; }), 'rongpin'),
-        { unit: ' 万' }));
-      structured += chartPanel('融品月目标完成度(%)', '', window.chartHelpers.vBars(
-        filterMonth((m.completion || []).map(function (x) { return { label: x.name, value: x.value, month: x.month }; }), 'rongpin'),
-        { unit: '%' }));
-      structured += '</div>';
-      var dcols = [
-        { key: 'anchor', label: '主播昵称' }, { key: 'gmv', label: '直播间GMV(万)', cls: 'mono' },
-        { key: 'commission', label: '预估佣金(万)', cls: 'mono' }, { key: 'dept', label: '部门' }, { key: 'growth', label: '环比增长(%)', cls: 'mono' }
-      ];
-      structured += '<div class="panel"><div class="panel-head"><div class="ph-title">分销播报（按商品）</div></div>' + dataTable('rongpin_dist', dcols, m.distribution || [], { exportName: '分销播报' }) + '</div>';
-      out += moduleBody('rongpin', m, structured);
-      return out;
-    },
-
-    deputy: function (d) {
-      var m = d.deputy || {};
-      var html = '<div class="view-title">副总业绩</div><div class="view-sub">各副总团队目标完成情况 · 数据来源：WPS共享表格（示例） · ' + esc(m.updated || '-') + '</div>';
-      html += kpiRow(m.kpis);
-      html += '<div class="grid-2b">';
-      html += chartPanel('完成率对比(%)', '', window.chartHelpers.vBars(filterMonth(m.chart || [], 'deputy'), { unit: '%' }));
-      var dcols = [
-        { key: 'name', label: '姓名' }, { key: 'target', label: '目标(万)', cls: 'mono' },
-        { key: 'done', label: '完成(万)', cls: 'mono' }, { key: 'rate', label: '完成率(%)', cls: 'mono' }, { key: 'status', label: '状态', tag: 'status' }
-      ];
-      html += '<div class="panel"><div class="panel-head"><div class="ph-title">副总团队明细</div></div>' + dataTable('deputy_tbl', dcols, m.rows || [], { exportName: '副总团队明细' }) + '</div>';
-      html += '</div>';
-      return html;
-    },
-
-    preference: function (d) {
-      var m = d.preference || {};
-      var html = '<div class="view-title">商品喜好</div><div class="view-sub">用户商品偏好分析 · 数据来源：WPS共享表格（示例） · ' + esc(m.updated || '-') + '</div>';
-      html += monthBar('preference');
-      html += '<div class="grid-2b">';
-      html += chartPanel('品类喜好度', '', window.chartHelpers.hBars(filterMonth((m.byCategory || []).map(function (x) { return { label: x.category, value: x.likes, color: '#ff7aa8', month: x.month }; }), 'preference'), {}));
-      html += '<div class="panel"><div class="panel-head"><div class="ph-title">商品 TOP 喜好</div></div>' +
-        (m.top || []).map(function (t, i) { return '<div class="list-item"><div class="li-name">' + (i + 1) + '. ' + esc(t.name) + '</div><span class="pill" style="color:#ff7aa8">' + esc(t.likes) + ' 票</span></div>'; }).join('') + '</div>';
-      html += '</div>';
-      return html;
-    },
-
-    forecast: function (d) {
-      var m = d.forecast || {};
-      var html = '<div class="view-title">业绩预估</div><div class="view-sub">月度业绩预估与置信度 · ' + sourceLabel(m.source) + ' · ' + esc(m.updated || '-') + '</div>';
-      var s = m.summary || {};
-      var structured = kpiRow([
-        { title: '预估业绩', value: s.est != null ? s.est : '-', unit: '万', sub: '目标口径', trend: 'flat' },
-        { title: '实际完成', value: s.actual != null ? s.actual : '-', unit: '万', sub: '已发生', trend: 'up' },
-        { title: '预估置信度', value: s.confidence != null ? s.confidence : '-', unit: '%', sub: '模型置信', trend: 'flat' }
-      ]);
-      structured += chartPanel('月度业绩预估(万)', '', window.chartHelpers.vBars(filterMonth(m.months || [], 'forecast'), { unit: ' 万' }));
-      var fcols = [
-        { key: 'month', label: '月份' }, { key: 'est', label: '预估(万)', cls: 'mono' },
-        { key: 'actual', label: '实际(万)', cls: 'mono' }, { key: 'confidence', label: '置信度(%)', cls: 'mono' }
-      ];
-      structured += '<div class="panel"><div class="panel-head"><div class="ph-title">预估明细</div></div>' + dataTable('forecast_tbl', fcols, filterMonth(m.months || [], 'forecast'), { exportName: '业绩预估明细', month: true }) + '</div>';
-      html += moduleBody('forecast', m, structured);
-      return html;
+  // ---------- 主播业绩（每日快照） ----------
+  function viewAnchorPerformance() {
+    var m = modules().anchorPerformance || {};
+    var sheets = m.sheets || [];
+    if (!sheets.length) {
+      return viewHead('主播业绩', '暂无快照') + panel('', '', '<div class="empty">还没有每日快照数据</div>');
     }
-  };
+    var html = viewHead('主播业绩',
+      sheets.length + ' 个每日快照 · ' + (m.asOf ? '截止 ' + esc(m.asOf) : ''));
 
-  function listWithChange(list) {
-    return (list || []).map(function (x) {
-      var up = x.change >= 0;
-      return '<div class="list-item"><div><div class="li-name">' + esc(x.name) + '</div><div class="li-meta">' + esc(x.revenue || '') + '</div></div><span class="pill" style="color:' + (up ? '#2bbf7a' : '#ef5b5b') + '">' + (up ? '+' : '') + esc(x.change) + '%</span></div>';
-    }).join('');
+    function pickCol(headers, names) {
+      var i, j;
+      for (i = 0; i < names.length; i++) {
+        if (headers.indexOf(names[i]) >= 0) return names[i];
+      }
+      // 精确匹配不到时按前缀匹配（如「风控后结算GMV(预估拼接)(元)·2日」）
+      for (i = 0; i < names.length; i++) {
+        for (j = 0; j < headers.length; j++) {
+          if (String(headers[j]).indexOf(names[i]) === 0) return headers[j];
+        }
+      }
+      return null;
+    }
+    var cards = sheets.map(function (s) {
+      var cG = pickCol(s.headers, ['下播GMV']);
+      var cS = pickCol(s.headers, ['风控后结算GMV(预估拼接)(元)', '风控后结算GMV(元)']);
+      var tg = 0, ts = 0;
+      (s.rows || []).forEach(function (r) { if (cG) tg += num(r[cG]); if (cS) ts += num(r[cS]); });
+      return { name: s.name, date: s.date, gmv: tg, settle: ts, count: (s.rows || []).length };
+    });
+    var maxG = Math.max.apply(null, cards.map(function (c) { return c.gmv; }).concat([1]));
+
+    html += '<div class="grid-2">';
+    html += chartPanel('每日 GMV 对比', '万元，来自各日快照',
+      CH.vBars(cards.map(function (c) { return { label: c.name, value: wanNum(c.gmv) }; }), { unit: ' 万', height: 260 }));
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">快照概览</div></div>' +
+      cards.map(function (c) {
+        var p = Math.round((c.gmv / maxG) * 100);
+        return '<div style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px">' +
+          '<b>' + esc(c.name) + '</b><span style="color:#7b8798">' + esc(c.date || '') + '</span></div>' +
+          '<div style="display:flex;justify-content:space-between;font-size:12px;color:#7b8798;margin-bottom:5px">' +
+          '<span>' + c.count + ' 人</span><span>' + wan(c.gmv) + ' 万 · 结算 ' + wan(c.settle) + ' 万</span></div>' +
+          '<div style="height:7px;border-radius:4px;background:#eef1f5"><div style="height:100%;width:' + p + '%;border-radius:4px;background:linear-gradient(90deg,#2f6fed,#5b8dff)"></div></div></div>';
+      }).join('') + '</div>';
+    html += '</div>';
+
+    var latest = sheets[sheets.length - 1];
+    var cols = latest.headers.slice(0, 14).map(function (h) {
+      var isNum = /GMV|金额|率|数/.test(h);
+      var col = { key: h, label: h.length > 12 ? h.slice(0, 12) + '…' : h, cls: isNum ? 'mono' : '' };
+      if (/日期/.test(h)) {
+        col.render = function (r) { return esc(fmtExcelDate(r[h])); };
+      }
+      return col;
+    });
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">' + esc(latest.name) + ' 快照明细</div>' +
+      '<span class="ph-sub">' + latest.date + ' · 展示前 14 列 / 共 ' + latest.headers.length + ' 列</span></div>' +
+      dataTable('anchorPerformance', cols, latest.rows || [], { exportName: '主播业绩_' + latest.name, pageSize: 20 }) + '</div>';
+    return html;
   }
-  function poolPanel(title, color, rows, sub) {
-    var colorMap = { green: '#e6f7ee', yellow: '#fff8e1', red: '#fdeaea' };
-    var tcolor = { green: '#1f9d5b', yellow: '#b8860b', red: '#d64545' };
-    var body = rows.length ? rows.map(function (r) {
-      return '<div class="list-item"><div><div class="li-name">' + esc(r.name) + '</div><div class="li-meta">视频数 ' + esc(r.videos) + '</div></div><span class="pill" style="color:' + tcolor[color] + '">' + esc(r.margin) + '%</span></div>';
-    }).join('') : '<div class="empty">无</div>';
-    return '<div class="panel" style="background:' + colorMap[color] + '"><div class="panel-head"><div class="ph-title" style="color:' + tcolor[color] + '">' + title + ' (' + rows.length + ')</div><div class="ph-sub">' + esc(sub || '') + '</div></div>' + body + '</div>';
+
+  // ---------- 业绩预估 ----------
+  // 工作簿是「日期 × 部门」的每日预估/实际，单位万元
+  function parseForecastRows(m) {
+    var out = [];
+    (m.rawRows || []).forEach(function (r) {
+      var d = fmtExcelDate(r['时间']);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d))) return;
+      var dept = String(r['部门'] || '').trim();
+      if (!dept || dept.indexOf('\ufffd') >= 0) return;   // 过滤损坏字符行
+      out.push({
+        date: String(d), month: String(d).slice(0, 7), dept: dept,
+        est: num(r['预估支付GMV']), actual: num(r['实际支付GMV达成']),
+        dev: num(r['支付GMV偏差率']) * 100,
+        note: String(r['解释专区'] || '').trim()
+      });
+    });
+    return out;
   }
+
+  function viewForecast() {
+    var m = modules().forecast || {};
+    var rows = parseForecastRows(m);
+    if (!rows.length) {
+      return viewHead('业绩预估', '暂无数据') +
+        panel('等待接入', '', '<div class="empty">业绩预估数据尚未入库。该表目前受「禁止下载」保护，权限放开后会自动同步。</div>');
+    }
+
+    var depts = [];
+    rows.forEach(function (r) {
+      if (r.dept !== '合计' && depts.indexOf(r.dept) < 0) depts.push(r.dept);
+    });
+    var dept = (state.filter.forecast && depts.indexOf(state.filter.forecast) >= 0) ? state.filter.forecast : (depts[0] || '');
+
+    var months = [];
+    rows.forEach(function (r) { if (months.indexOf(r.month) < 0) months.push(r.month); });
+    months.sort();
+    var withActual = rows.filter(function (r) { return r.actual > 0; }).map(function (r) { return r.month; }).sort();
+    var defMonth = withActual.length ? withActual[withActual.length - 1] : months[months.length - 1];
+    var mon = (state.filter.forecastMonth && months.indexOf(state.filter.forecastMonth) >= 0) ? state.filter.forecastMonth : defMonth;
+
+    var mine = rows.filter(function (r) { return r.dept === dept && r.month === mon; })
+      .sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+
+    // 统计范围截到最后一个有实际数据的日期，避免"未来日期"拉低达成率
+    var lastDone = '';
+    mine.forEach(function (r) { if (r.actual > 0) lastDone = r.date; });
+    var scope = mine.filter(function (r) { return !lastDone || r.date <= lastDone; });
+
+    var estSum = scope.reduce(function (a, r) { return a + r.est; }, 0);
+    var actSum = scope.reduce(function (a, r) { return a + r.actual; }, 0);
+    var achieve = estSum > 0 ? (actSum / estSum) * 100 : 0;
+    var gap = actSum - estSum;
+
+    var html = viewHead('业绩预估',
+      '预估支付 GMV 与实际达成对比 · <b>' + esc(dept) + '</b> · ' +
+      (lastDone ? '统计至 ' + esc(lastDone.slice(5)) : '全月') + ' · 单位万元',
+      '<span class="fresh-dot"><i></i>每日更新</span>');
+
+    // 月份切换
+    html += '<div class="panel tight"><div class="chips">' + months.map(function (mm) {
+      var label = Number(mm.slice(5, 7)) + '月';
+      return '<button class="chip-btn' + (mm === mon ? ' on' : '') + '" data-fc="' + mm + '">' + label + '</button>';
+    }).join('') +
+      (depts.length > 1 ? '<span class="tcount" style="margin-left:auto">部门：' + depts.map(function (d) {
+        return '<button class="chip-btn' + (d === dept ? ' on' : '') + '" data-fd="' + esc(d) + '" style="margin-left:6px">' + esc(d) + '</button>';
+      }).join('') + '</span>' : '') + '</div></div>';
+
+    html += kpiCards([
+      { icon: 'forecast', color: '#7a5cff', title: '预估 GMV', money: estSum * 10000, sub: scope.length + ' 天合计' },
+      { icon: 'gmv', color: '#2f6fed', title: '实际 GMV', money: actSum * 10000, sub: '已发生' },
+      { icon: 'rate', color: achieve >= 95 ? '#12a76c' : achieve >= 80 ? '#f5871f' : '#e5484d', title: '达成率', value: pct1(achieve), unit: '', sub: achieve >= 100 ? '已超额完成' : '低于预估 ' + pct1(100 - achieve) },
+      { icon: 'settle', color: gap >= 0 ? '#12a76c' : '#e5484d', title: '预估差额', money: Math.abs(gap) * 10000, sub: (gap >= 0 ? '超额 ' : '缺口 ') + (gap >= 0 ? '▲' : '▼') }
+    ]);
+
+    // 每日对比
+    var pts = scope.filter(function (r) { return r.est > 0 || r.actual > 0; });
+    if (pts.length) {
+      html += '<div class="panel chart-panel"><div class="panel-head"><div class="ph-title">每日预估 vs 实际 <span class="ph-sub">万元</span></div>' +
+        '<div class="ph-tools"><button class="tbtn sm" data-role="img">导出图片</button></div></div>' +
+        '<div class="legend"><span><i style="background:#2f6fed"></i>实际</span><span><i style="background:#b9c6e8"></i>预估</span></div>' +
+        CH.multiLine([
+          { name: '预估', color: '#b9c6e8', dashed: true, points: pts.map(function (r) { return { label: r.date.slice(5), value: Math.round(r.est * 10) / 10 }; }) },
+          { name: '实际', color: '#2f6fed', points: pts.map(function (r) { return { label: r.date.slice(5), value: Math.round(r.actual * 10) / 10 }; }) }
+        ], { height: 280, fmt: function (v) { return v + '万'; } }) + '</div>';
+    }
+
+    // 部门横向对比（仅在有多部门明细时显示）
+    var deptRows = depts.map(function (d) {
+      var ds = rows.filter(function (r) { return r.dept === d && r.month === mon; });
+      var e = 0, a = 0;
+      var ld = '';
+      ds.forEach(function (r) { if (r.actual > 0) ld = r.date; });
+      ds.forEach(function (r) {
+        if (ld && r.date > ld) return;
+        e += r.est; a += r.actual;
+      });
+      return { name: d, est: e, actual: a, rate: e > 0 ? (a / e) * 100 : 0, days: ds.length };
+    }).filter(function (x) { return x.est > 0 || x.actual > 0; });
+
+    if (deptRows.length > 1) {
+      html += '<div class="panel"><div class="panel-head"><div class="ph-title">部门对比</div><span class="ph-sub">' + mon.slice(5) + ' 月 · 单位万元</span></div>' +
+        dataTable('forecast_dept', [
+          { key: 'name', label: '部门' },
+          { key: 'days', label: '天数', cls: 'mono' },
+          { key: 'est', label: '预估(万)', cls: 'mono', render: function (r) { return money(r.est); } },
+          { key: 'actual', label: '实际(万)', cls: 'mono', render: function (r) { return money(r.actual); } },
+          {
+            key: 'rate', label: '达成率', cls: 'mono', render: function (r) {
+              var v = r.rate;
+              var col = v >= 95 ? '#12a76c' : v >= 80 ? '#f5871f' : '#e5484d';
+              return '<div class="rate-cell"><span style="color:' + col + ';font-weight:700">' + pct1(v) + '</span>' +
+                '<span class="rate-bar"><i style="width:' + Math.max(3, Math.min(100, v)) + '%;background:' + col + '"></i></span></div>';
+            }
+          }
+        ], deptRows, { pageSize: 10, exportName: '部门业绩对比' }) + '</div>';
+    }
+
+    // 明细
+    var detailRows = mine.filter(function (r) { return r.est > 0 || r.actual > 0; });
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">每日明细</div><span class="ph-sub">' + esc(dept) + ' · ' + mon.slice(5) + ' 月</span></div>' +
+      dataTable('forecast_daily', [
+        { key: 'date', label: '日期' },
+        { key: 'est', label: '预估(万)', cls: 'mono', render: function (r) { return money(r.est); } },
+        { key: 'actual', label: '实际(万)', cls: 'mono', render: function (r) { return money(r.actual); } },
+        {
+          key: 'rate', label: '达成率', cls: 'mono', render: function (r) {
+            if (!(r.est > 0) || !(r.actual > 0)) return '—';
+            var v = (r.actual / r.est) * 100;
+            var col = v >= 95 ? '#12a76c' : v >= 80 ? '#f5871f' : '#e5484d';
+            return '<span style="color:' + col + ';font-weight:700">' + pct1(v) + '</span>';
+          }
+        },
+        {
+          key: 'note', label: '偏差说明', render: function (r) {
+            if (!r.note) return '<span style="color:#c3cad5">—</span>';
+            var short = r.note.replace(/^解释[:：]/, '');
+            return '<span title="' + esc(r.note) + '">' + esc(short.length > 34 ? short.slice(0, 34) + '…' : short) + '</span>';
+          }
+        }
+      ], detailRows, { pageSize: 20, exportName: '业绩预估_每日', searchPlaceholder: '搜索日期或说明…' }) + '</div>';
+
+    return html;
+  }
+
+  // ---------- 预估结算 ----------
+  function viewRongpin() {
+    var rank = modules().anchorRank || {};
+    var daily = rank.daily || [];
+    var s = rank.summary || {};
+    if (!daily.length) {
+      return viewHead('预估结算', '暂无数据') + panel('', '', '<div class="empty">还没有结算数据</div>');
+    }
+    var active = daily.filter(function (x) { return num(x.settle) > 0; });
+    var html = viewHead('预估结算', '每日预估结算进度 · ' + (rank.asOf ? '截止 ' + esc(rank.asOf) : ''));
+
+    var total = active.reduce(function (a, x) { return a + num(x.settle); }, 0);
+    html += kpiCards([
+      { icon: 'settle', color: '#12a76c', title: '累计预估结算', money: s.settleCum, sub: '风控后口径' },
+      { icon: 'rate', color: '#f5871f', title: '平均结算率', value: pct1(s.avgRate), unit: '', sub: '整体 ' + pct1(s.calcRate) },
+      { icon: 'anchorPerformance', color: '#2f6fed', title: '已出数据', value: active.length, unit: '天', sub: '本月累计' },
+      {
+        icon: 'gmv', color: '#7a5cff', title: '日均结算', money: (active.length ? total / active.length : 0),
+        sub: '按已出数据天数', spark: active.map(function (x) { return num(x.settle); })
+      }
+    ]);
+
+    html += chartPanel('每日预估结算 GMV', '万元', CH.line(active.map(function (x) {
+      return { label: x.day, value: wanNum(x.settle) };
+    }), { color: '#12a76c', height: 250, fmt: function (v) { return v + '万'; }, showValue: active.length <= 8 }));
+
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">每日明细</div><span class="ph-sub">1~30 日</span></div>' +
+      dataTable('rongpin_daily', [
+        { key: 'day', label: '日期' },
+        { key: 'settle', label: '预估结算GMV(元)', cls: 'mono', render: function (r) { return money(r.settle); } },
+        { key: 'rate', label: '当日结算率', cls: 'mono', render: function (r) { return num(r.rate) > 0 ? pct1(r.rate) : '—'; } }
+      ], daily, { exportName: '预估结算_每日', pageSize: 15 }) + '</div>';
+    return html;
+  }
+
+  var VIEWS = {
+    home: viewHome,
+    anchorRank: viewAnchorRank,
+    anchorPerformance: viewAnchorPerformance,
+    commodity: viewCommodity,
+    forecast: viewForecast,
+    rongpin: viewRongpin
+  };
 
   // ---------- 渲染 ----------
   function renderNav() {
     var nav = $('nav');
-    nav.innerHTML = MODULES.map(function (m) {
-      return '<div class="nav-item ' + (m.key === state.current ? 'active' : '') + '" data-key="' + m.key + '">' + icon(m.key) + '<span>' + m.label + '</span></div>';
-    }).join('');
+    var groups = {};
+    MODULES.forEach(function (m) { (groups[m.group] = groups[m.group] || []).push(m); });
+    var html = '';
+    Object.keys(groups).forEach(function (g) {
+      html += '<div class="nav-group">' + esc(g) + '</div>';
+      groups[g].forEach(function (m) {
+        html += '<div class="nav-item' + (m.key === state.current ? ' active' : '') + '" data-key="' + m.key + '">' +
+          icon(m.key) + '<span>' + esc(m.label) + '</span></div>';
+      });
+    });
+    nav.innerHTML = html;
     Array.prototype.forEach.call(nav.querySelectorAll('.nav-item'), function (el) {
-      el.onclick = function () { switchModule(el.getAttribute('data-key')); };
+      el.onclick = function () {
+        switchModule(el.getAttribute('data-key'));
+        document.querySelector('.sidebar').classList.remove('open');
+      };
     });
   }
 
-  function renderView() {
+  function renderView(keepScroll) {
     var content = $('content');
+    var prevTop = keepScroll ? content.scrollTop : 0;
     var fn = VIEWS[state.current] || VIEWS.home;
-    var title = (MODULES.filter(function (m) { return m.key === state.current; })[0] || {}).label || '首页';
-    var html = fn((state.data && state.data.modules) || {});
-    var upd = state.data && state.data.updatedAt ? new Date(state.data.updatedAt).toLocaleString('zh-CN') : '未知';
-    html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><span class="refresh-tip"><span class="dot"></span>数据每 20 分钟自动刷新 · 上次更新：' + upd + '</span><button class="btn-login" style="width:auto;padding:8px 16px" onclick="window.__refresh()">立即刷新</button></div>' + html;
+    var title = (MODULES.filter(function (m) { return m.key === state.current; })[0] || {}).label || '经营驾驶舱';
+    var html;
+    try {
+      html = fn();
+    } catch (e) {
+      console.error(e);
+      html = '<div class="empty">页面渲染出错：' + esc(e.message) + '</div>';
+    }
     content.innerHTML = html;
     $('crumb').textContent = title;
-    // 搜索框失焦后重新渲染时恢复焦点
-    if (state._focus && state._focus.role === 'search') {
-      var inp = content.querySelector('input[data-role="search"][data-mod="' + state._focus.mod + '"]');
-      if (inp) { inp.focus(); var v = inp.value; inp.value = ''; inp.value = v; }
-      state._focus = null;
-    }
+    content.scrollTop = prevTop;
   }
 
   function switchModule(key) {
+    if (!VIEWS[key]) key = 'home';
     state.current = key;
+    try { history.replaceState(null, '', '#' + key); } catch (e) {}
     renderNav();
-    renderView();
+    renderView(false);
+  }
+
+  // 支持 #anchorRank、#anchorRank/主播名 这类直达链接
+  function parseHash() {
+    var h = String(location.hash || '').replace(/^#/, '').trim();
+    if (!h) return null;
+    var seg = h.split('/');
+    if (!VIEWS[seg[0]]) return null;
+    var arg = seg.slice(1).join('/');
+    try { arg = decodeURIComponent(arg); } catch (e) {}
+    return { view: seg[0], arg: arg || null };
+  }
+  function applyHash() {
+    var hs = parseHash();
+    if (!hs) return;
+    if (hs.view !== state.current) {
+      state.current = hs.view;
+      renderNav();
+      renderView(false);
+    }
+    if (hs.arg && hs.view === 'anchorRank') {
+      setTimeout(function () { openAnchor(hs.arg); }, 50);
+    }
   }
 
   window.__refresh = function () {
-    fetch('/api/refresh', { method: 'POST' }).then(function (r) { return r.json(); }).then(function () { return fetchData(true); });
+    fetch('/api/refresh', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function () { return fetchData(true); })
+      .catch(function () { fetchData(true); });
   };
 
-  // ---------- 全局点击 / 变更 委托 ----------
-  function attachContentHandlers() {
-    var content = $('content');
-    content.addEventListener('click', function (e) {
-      var el = e.target.closest ? e.target.closest('[data-role]') : null;
-      if (el) {
-        var role = el.getAttribute('data-role');
-        if (role === 'export') { handleExport(el.getAttribute('data-mod')); return; }
-        if (role === 'unpin') { state.pin[el.getAttribute('data-mod')] = {}; renderView(); return; }
-        if (role === 'img') { handleImgExport(el); return; }
-        if (role === 'upload') { uploadCsv(el.getAttribute('data-mod')); return; }
-      }
-      // 表头排序
-      var th = e.target.closest ? e.target.closest('th.sortable') : null;
-      if (th) {
-        var mod = (e.target.closest('table') || {}).getAttribute && (e.target.closest('table')).getAttribute('data-mod');
-        var col = th.getAttribute('data-col');
-        var cur = state.sort[mod];
-        if (cur && cur.key === col) state.sort[mod] = { key: col, dir: cur.dir === 'asc' ? 'desc' : 'asc' };
-        else state.sort[mod] = { key: col, dir: 'asc' };
-        renderView();
-        return;
-      }
-      // 点击行置顶
-      var tr = e.target.closest ? e.target.closest('tr.drow') : null;
-      if (tr) {
-        var tmod = (e.target.closest('table') || {}).getAttribute && (e.target.closest('table')).getAttribute('data-mod');
-        var idx = parseInt(tr.getAttribute('data-idx'), 10);
-        var rows = state.lastTable[tmod] ? state.lastTable[tmod].rows : [];
-        var r = rows[idx];
-        if (r) {
-          var key = rowKey(tmod, r);
-          state.pin[tmod] = state.pin[tmod] || {};
-          if (state.pin[tmod][key]) delete state.pin[tmod][key]; else state.pin[tmod][key] = true;
-          renderView();
+  // ---------- 事件 ----------
+  function attachHandlers() {
+    // 委托到 document：抽屉里的表格在 #content 之外，也要能响应排序/搜索/分页
+    document.addEventListener('click', function (e) {
+      var t = e.target;
+
+      // 通用按钮
+      var btn = t.closest ? t.closest('[data-role]') : null;
+      if (btn) {
+        var role = btn.getAttribute('data-role');
+        if (role === 'export') {
+          var mod = btn.getAttribute('data-mod');
+          var meta = state.tableMeta[mod];
+          if (meta) downloadCSV(meta.cols, meta.rows, (meta.opts.exportName || mod) + '.csv');
+          return;
+        }
+        if (role === 'img') {
+          var panelEl = btn.closest('.chart-panel') || btn.closest('.panel');
+          var svg = panelEl ? panelEl.querySelector('svg.chart') : null;
+          if (!svg) { alert('未找到图表'); return; }
+          var tt = panelEl.querySelector('.ph-title');
+          exportSVGToPNG(svg, (tt ? tt.textContent.trim() : 'chart') + '.png');
+          return;
+        }
+        if (role === 'export-rank') {
+          var rk = modules().anchorRank || {};
+          var rowsAll = (rk.rows || []);
+          downloadCSV([
+            { key: 'anchor', label: '主播' }, { key: 'org', label: '所属公司' }, { key: 'type', label: '类型' },
+            { key: 'gmv', label: '当日GMV' }, { key: 'gmvCum', label: '累计GMV' },
+            { key: 'settleCum', label: '结算GMV' }, { key: 'rate', label: '结算率' }
+          ], rowsAll, '主播榜单_全部.csv');
+          return;
         }
       }
-    });
-    content.addEventListener('change', function (e) {
-      var sel = e.target.closest ? e.target.closest('select[data-role="month"]') : null;
-      if (sel) { state.month[sel.getAttribute('data-mod')] = sel.value; state.sort = {}; renderView(); }
-    });
-    content.addEventListener('input', function (e) {
-      var inp = e.target.closest ? e.target.closest('input[data-role="search"]') : null;
-      if (inp) {
-        var mod = inp.getAttribute('data-mod');
-        state.search[mod] = inp.value;
-        state._focus = { role: 'search', mod: mod };
-        renderView();
+
+      // 快捷筛选
+      var chip = t.closest ? t.closest('[data-filter]') : null;
+      if (chip) {
+        state.filter.anchorRank = chip.getAttribute('data-filter');
+        state.page.anchorRank = 1;
+        renderView(true);
+        return;
+      }
+
+      // 业绩预估：月份 / 部门切换
+      var fcm = t.closest ? t.closest('[data-fc]') : null;
+      if (fcm) {
+        state.filter.forecastMonth = fcm.getAttribute('data-fc');
+        renderView(true);
+        return;
+      }
+      var fdp = t.closest ? t.closest('[data-fd]') : null;
+      if (fdp) {
+        state.filter.forecast = fdp.getAttribute('data-fd');
+        renderView(true);
+        return;
+      }
+
+      // 洞察跳转
+      var ins = t.closest ? t.closest('[data-insight]') : null;
+      if (ins) {
+        var cards = IN.build(modules());
+        var it = cards[parseInt(ins.getAttribute('data-insight'), 10)];
+        if (it && it.action) {
+          if (it.action.filter) { state.filter.anchorRank = it.action.filter; state.page.anchorRank = 1; }
+          switchModule(it.action.view);
+        }
+        return;
+      }
+
+      // 跳转按钮
+      var go = t.closest ? t.closest('[data-goto]') : null;
+      if (go) { switchModule(go.getAttribute('data-goto')); return; }
+
+      // 排序
+      var th = t.closest ? t.closest('th.sortable') : null;
+      if (th) {
+        var block = th.closest('[data-tblroot]');
+        if (!block) return;
+        var mkey = block.getAttribute('data-tblroot');
+        var col = th.getAttribute('data-col');
+        var cur = state.sort[mkey];
+        state.sort[mkey] = { key: col, dir: (cur && cur.key === col && cur.dir === 'asc') ? 'desc' : 'asc' };
+        refreshTable(mkey, true);
+        return;
+      }
+
+      // 分页
+      var pg = t.closest ? t.closest('[data-pg]') : null;
+      if (pg) {
+        var blk = pg.closest('[data-tblroot]');
+        if (!blk) return;
+        var mk = blk.getAttribute('data-tblroot');
+        state.page[mk] = parseInt(pg.getAttribute('data-pg'), 10);
+        refreshTable(mk, false);
+        return;
+      }
+
+      // 行点击 → 抽屉
+      var tr = t.closest ? t.closest('tr.drow') : null;
+      if (tr) {
+        var tableRoot = tr.closest('[data-tblroot]');
+        if (!tableRoot) return;
+        var kmod = tableRoot.getAttribute('data-tblroot');
+        var meta2 = state.tableMeta[kmod];
+        if (!meta2 || !meta2.opts || !meta2.opts.onRow) return;
+        var idx = parseInt(tr.getAttribute('data-row'), 10);
+        var st = tableState(kmod, meta2.cols, meta2.rows, meta2.opts);
+        var row = st.all[idx];
+        if (row) meta2.opts.onRow(row);
       }
     });
+
+    // 搜索：只刷新表体，保持输入焦点
+    document.addEventListener('input', function (e) {
+      var inp = e.target.closest ? e.target.closest('input[data-role="search"]') : null;
+      if (!inp) return;
+      var mod = inp.getAttribute('data-mod');
+      state.search[mod] = inp.value;
+      state.page[mod] = 1;
+      refreshTable(mod, true);
+    });
+
+    document.addEventListener('change', function (e) {
+      var sel = e.target.closest ? e.target.closest('select[data-role="pagesize"]') : null;
+      if (!sel) return;
+      var m2 = sel.getAttribute('data-mod');
+      state.pageSize[m2] = parseInt(sel.value, 10) || 20;
+      state.page[m2] = 1;
+      refreshTable(m2, true);
+    });
+
+    // 抽屉
+    $('drawerClose').onclick = closeDrawer;
+    $('drawerMask').onclick = closeDrawer;
+
+    // 侧栏
+    $('collapseBtn').onclick = function () {
+      var sb = document.querySelector('.sidebar');
+      sb.classList.toggle('collapsed');
+      this.textContent = sb.classList.contains('collapsed') ? '⟩' : '⟨ 收起';
+    };
+    $('menuBtn').onclick = function () {
+      document.querySelector('.sidebar').classList.toggle('open');
+    };
   }
 
-  function handleExport(mod) {
-    var t = state.lastTable[mod];
-    if (!t) { alert('当前页面暂无可导出的表格'); return; }
-    downloadCSV(t.columns, t.rows, (t.name || mod) + '.csv');
+  // ---------- 命令面板 ----------
+  var cmdState = { items: [], active: 0 };
+
+  function buildIndex() {
+    var d = modules();
+    var items = [];
+    MODULES.forEach(function (m) {
+      items.push({ type: 'page', label: m.label, sub: '页面', val: m.key, icon: '↗' });
+    });
+    var rank = d.anchorRank || {};
+    (rank.rows || []).forEach(function (r) {
+      if (!r.anchor) return;
+      items.push({
+        type: 'anchor', label: r.anchor, sub: '主播 · 累计 ' + wan(r.gmvCum) + ' 万',
+        val: r.anchor, icon: '播'
+      });
+    });
+    var comm = d.commodity || {};
+    (comm.products || []).forEach(function (p) {
+      items.push({ type: 'product', label: p.name, sub: '商品 · 结算 ' + wan(p.settle) + ' 万', val: p.name, icon: '品' });
+    });
+    (comm.categories || []).forEach(function (c) {
+      items.push({ type: 'cat', label: c.name, sub: '类目 · 结算率 ' + pct1(c.rate), val: c.name, icon: '类' });
+    });
+    state.cmdIndex = items;
+    return items;
   }
-  function handleImgExport(btn) {
-    var panel = btn.closest('.chart-panel') || btn.closest('.panel');
-    var svg = panel ? panel.querySelector('svg.chart') : null;
-    if (!svg) { alert('未找到图表'); return; }
-    var title = panel.querySelector('.ph-title');
-    exportSVGToPNG(svg, (title ? title.textContent : 'chart') + '.png');
+
+  function renderCmd(q) {
+    var all = state.cmdIndex || buildIndex();
+    var query = (q || '').trim().toLowerCase();
+    var list = query ? all.filter(function (x) {
+      return String(x.label).toLowerCase().indexOf(query) >= 0;
+    }) : all.filter(function (x) { return x.type === 'page'; });
+    list = list.slice(0, 40);
+
+    cmdState.items = list;
+    cmdState.active = 0;
+
+    if (!list.length) {
+      $('cmdList').innerHTML = '<div class="cmd-empty">没有匹配项</div>';
+      return;
+    }
+    var order = { page: '页面', anchor: '主播', product: '商品', cat: '类目' };
+    var html = '', lastType = '';
+    list.forEach(function (it, i) {
+      if (it.type !== lastType) {
+        html += '<div class="cmd-group">' + order[it.type] + '</div>';
+        lastType = it.type;
+      }
+      html += '<div class="cmd-item' + (i === 0 ? ' on' : '') + '" data-idx="' + i + '">' +
+        '<span class="ci-icon">' + esc(it.icon) + '</span><span>' + esc(it.label) + '</span>' +
+        '<span class="ci-sub">' + esc(it.sub) + '</span></div>';
+    });
+    $('cmdList').innerHTML = html;
   }
-  function uploadCsv(key) {
-    var inp = document.createElement('input');
-    inp.type = 'file'; inp.accept = '.csv,text/csv,.xlsx';
-    inp.onchange = function () {
-      var f = inp.files && inp.files[0]; if (!f) return;
-      var r = new FileReader();
-      r.onload = function () {
-        var content = String(r.result);
-        // 仅允许 CSV 文本（xlsx 需先另存为 CSV）
-        if (f.name.toLowerCase().indexOf('.xlsx') >= 0) { alert('请先在 WPS 中将表格「导出为 CSV」再上传，xlsx 暂不支持直接上传'); return; }
-        fetch('/api/upload-csv', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ module: key, content: content })
-        }).then(function (x) { return x.json(); }).then(function (j) {
-          if (j.ok) {
-            if (j.cloud === false) { alert('本地已更新，但写入云库失败：' + (j.cloudError || '未知错误')); }
-            else { alert('已写入云库（' + (j.rows || 0) + ' 行），全站实时可见'); }
-            fetchData(true);
-          }
-          else { alert(j.error || '上传失败'); }
-        }).catch(function () { alert('网络错误'); });
-      };
-      r.readAsText(f, 'utf-8');
-    };
-    inp.click();
+
+  function openCmd() {
+    buildIndex();
+    $('cmdMask').classList.add('show');
+    $('cmdInput').value = '';
+    renderCmd('');
+    setTimeout(function () { $('cmdInput').focus(); }, 30);
+  }
+  function closeCmd() { $('cmdMask').classList.remove('show'); }
+
+  function runCmdItem(it) {
+    if (!it) return;
+    closeCmd();
+    if (it.type === 'page') { switchModule(it.val); return; }
+    if (it.type === 'anchor') {
+      state.current = 'anchorRank';
+      renderNav();
+      renderView(false);
+      setTimeout(function () { openAnchor(it.val); }, 60);
+      return;
+    }
+    if (it.type === 'product' || it.type === 'cat') {
+      state.current = 'commodity';
+      state.search[it.type === 'product' ? 'commodity_prod' : 'commodity_cat'] = it.val;
+      renderNav();
+      renderView(false);
+    }
+  }
+
+  function bindCmd() {
+    $('searchTrigger').onclick = openCmd;
+    $('cmdMask').onclick = function (e) { if (e.target === $('cmdMask')) closeCmd(); };
+    $('cmdInput').addEventListener('input', function () { renderCmd(this.value); });
+    $('cmdList').addEventListener('click', function (e) {
+      var it = e.target.closest('[data-idx]');
+      if (it) runCmdItem(cmdState.items[parseInt(it.getAttribute('data-idx'), 10)]);
+    });
+    document.addEventListener('keydown', function (e) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        $('cmdMask').classList.contains('show') ? closeCmd() : openCmd();
+        return;
+      }
+      if (e.key === 'Escape') { closeCmd(); closeDrawer(); return; }
+      if (!$('cmdMask').classList.contains('show')) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        var n = cmdState.items.length;
+        if (!n) return;
+        cmdState.active = (cmdState.active + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
+        Array.prototype.forEach.call($('cmdList').querySelectorAll('.cmd-item'), function (el, i) {
+          el.classList.toggle('on', i === cmdState.active);
+        });
+        var onEl = $('cmdList').querySelector('.cmd-item.on');
+        if (onEl && onEl.scrollIntoView) onEl.scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        runCmdItem(cmdState.items[cmdState.active]);
+      }
+    });
   }
 
   // ---------- 数据 ----------
-  // ---------- 数据新鲜度：金山文档表格是否已被改动 ----------
-  function fmtTime(ms) {
-    if (!ms) return '--';
-    var d = new Date(ms);
-    return String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + ' ' +
-      String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-  }
-
   function renderSyncBar(j) {
     var el = $('syncBar');
     if (!el) return;
     var items = (j && j.items) || [];
-    var stale = items.filter(function (x) { return x.stale && x.reachable && x.linkOpen; });
-
+    // 只在「页面完全没有这类数据」时提示。否则 mtime 与云库 updated_at 的口径差异会长期误报：
+    // 拉取器比对内容指纹一致时会跳过写入，updated_at 不变，但表格 mtime 已经更新。
+    var stale = items.filter(function (x) { return x.stale && x.reachable && x.linkOpen && !x.hasCloudData; });
     if (!stale.length) { el.style.display = 'none'; return; }
-
-    var parts = [];
-    stale.forEach(function (x) {
-      parts.push('<b>' + x.label + '</b>（表格已于 ' + fmtTime(x.mtime) + ' 更新' +
-        (x.hasCloudData ? '' : '，页面尚无数据') + '）');
+    var parts = stale.map(function (x) {
+      return '<b>' + x.label + '</b>（表格已于 ' + fmtTime(x.mtime) + ' 更新' + (x.hasCloudData ? '' : '，页面尚无数据') + '）';
     });
-
-    var html = '<span class="sb-icon">⚠</span><span class="sb-text">以下表格有更新，页面数据还未同步：' + parts.join('；') +
-      '。导出后在「后台」上传即可，全站实时生效。</span>' +
-      '<button class="sb-btn" id="sbOpen">打开表格</button>' +
-      '<span class="sb-close" id="sbClose">×</span>';
-    el.innerHTML = html;
+    el.innerHTML = '<span class="sb-icon">⚠</span><span class="sb-text">以下表格有更新，页面数据还未同步：' + parts.join('；') + '。</span>' +
+      '<button class="sb-btn" id="sbOpen">打开表格</button><span class="sb-close" id="sbClose">×</span>';
     el.style.display = 'flex';
-    el.className = 'syncbar';
-
-    var first = stale[0];
-    $('sbOpen').onclick = function () { if (first && first.url) window.open(first.url, '_blank'); };
+    $('sbOpen').onclick = function () { if (stale[0] && stale[0].url) window.open(stale[0].url, '_blank'); };
     $('sbClose').onclick = function () { el.style.display = 'none'; };
   }
 
@@ -810,7 +1263,7 @@
     return fetch('/api/freshness?_t=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (j) { if (j && j.ok) renderSyncBar(j); })
-      .catch(function () { /* 探测失败不影响主流程 */ });
+      .catch(function () {});
   }
 
   function fetchData(force) {
@@ -822,7 +1275,7 @@
       if (!force && state.lastUpdated && d.updatedAt === state.lastUpdated) return;
       state.data = d;
       state.lastUpdated = d.updatedAt;
-      renderView();
+      renderView(true);
     }).catch(function (e) { console.error(e); });
   }
 
@@ -834,9 +1287,9 @@
 
   function tickClock() {
     var now = new Date();
-    var s = now.getFullYear() + '/' + String(now.getMonth() + 1).padStart(2, '0') + '/' + String(now.getDate()).padStart(2, '0') + ' ' +
-      String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0') + ':' + String(now.getSeconds()).padStart(2, '0');
-    var el = $('topClock'); if (el) el.textContent = s;
+    var s = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+    var el = $('topClock');
+    if (el) el.textContent = (now.getMonth() + 1) + '月' + now.getDate() + '日 ' + s;
   }
 
   // ---------- 登录 ----------
@@ -851,7 +1304,7 @@
     }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
         if (res.ok && res.j.ok) {
-          if ($('remember').checked) { try { localStorage.setItem('dp_remember', JSON.stringify({ u: u, p: p })); } catch (e) {} }
+          if ($('remember').checked) { try { localStorage.setItem('dp_remember', JSON.stringify({ u: u, p: p })); } catch (err) {} }
           enterApp(res.j.user);
         } else {
           $('loginErr').textContent = (res.j && res.j.error) || '登录失败';
@@ -865,11 +1318,14 @@
     $('app').classList.add('show');
     $('userName').textContent = user.name || user.username;
     $('avatar').textContent = (user.name || user.username || '?').charAt(0);
-    // 恢复导入覆盖（localStorage 持久化）
-    try { state.overrides = JSON.parse(localStorage.getItem('dp_overrides') || '{}'); } catch (e) { state.overrides = {}; }
+    var hs = parseHash();
+    if (hs) state.current = hs.view;
     renderNav();
-    fetchData(true);
+    fetchData(true).then(function () {
+      if (hs && hs.arg && hs.view === 'anchorRank') openAnchor(hs.arg);
+    });
     startPolling();
+    window.addEventListener('hashchange', applyHash);
   }
 
   function logout() {
@@ -878,24 +1334,20 @@
 
   // ---------- 初始化 ----------
   function init() {
-    try { state.overrides = JSON.parse(localStorage.getItem('dp_overrides') || '{}'); } catch (e) { state.overrides = {}; }
     try {
       var rem = JSON.parse(localStorage.getItem('dp_remember') || 'null');
       if (rem) { $('username').value = rem.u || ''; $('password').value = rem.p || ''; $('remember').checked = true; }
     } catch (e) {}
     $('loginForm').addEventListener('submit', doLogin);
     $('logoutBtn').onclick = logout;
-    $('collapseBtn').onclick = function () {
-      var sb = document.querySelector('.sidebar');
-      sb.style.width = sb.style.width === '64px' ? '220px' : '64px';
-    };
-    // 数据由 WPS 共享表格直连读取，不再需要手动导入。
-    attachContentHandlers();
-    setInterval(tickClock, 1000); tickClock();
+    attachHandlers();
+    bindCmd();
+    setInterval(tickClock, 30000); tickClock();
 
-    fetch('/api/me?_t=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
-      if (j.user) enterApp(j.user);
-    }).catch(function () {});
+    fetch('/api/me?_t=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (j.user) enterApp(j.user); })
+      .catch(function () {});
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

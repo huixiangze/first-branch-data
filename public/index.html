@@ -4,11 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>第一分公司数据中台</title>
-  <link rel="stylesheet" href="/css/style.css?v=20261105b" />
+  <link rel="stylesheet" href="/css/style.css?v=20261105c" />
 </head>
 <body>
 
-  <!-- ===== 登录页（屏蔽段） ===== -->
+  <!-- ===== 登录页 ===== -->
   <div class="login-wrap" id="loginWrap">
     <div class="login-left">
       <div class="brand">HuiMai Data Middle Platform</div>
@@ -43,34 +43,66 @@
 
   <!-- ===== 应用框架 ===== -->
   <div class="app" id="app">
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
       <div class="logo">
         <div class="t">第一分公司数据中台</div>
-        <div class="s">FIRST BRANCH · DATA PLATFORM</div>
+        <div class="s">FIRST BRANCH · DATA</div>
       </div>
       <nav class="nav" id="nav"></nav>
       <div class="collapse" id="collapseBtn">⟨ 收起</div>
     </aside>
     <div class="main">
       <header class="topbar">
+        <button class="menu-btn" id="menuBtn" aria-label="菜单">☰</button>
         <div class="crumb" id="crumb">首页</div>
-        <input class="search" placeholder="搜索主题、商品、主播、组件" />
+        <div class="search-trigger" id="searchTrigger">
+          <svg viewBox="0 0 24 24"><path d="M10 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Zm9.7 2.3-4.2-4.2"/></svg>
+          <span class="placeholder-text">搜索主播、商品、类目…</span>
+          <span class="kbd">Ctrl K</span>
+        </div>
         <div class="clock" id="topClock">--</div>
         <div class="user">
           <div class="avatar" id="avatar">张</div>
           <span id="userName">--</span>
-          <a href="/admin.html" style="color:#7a869e;text-decoration:none;font-size:13px;margin:0 12px">后台</a>
+          <a href="/admin.html" class="admin-link">后台</a>
           <span class="logout" id="logoutBtn">退出</span>
         </div>
       </header>
       <div class="syncbar" id="syncBar" style="display:none"></div>
       <div class="content" id="content">
-        <div class="loading">数据加载中…</div>
+        <div class="kpi-row"><div class="skeleton sk-card"></div><div class="skeleton sk-card"></div><div class="skeleton sk-card"></div><div class="skeleton sk-card"></div></div>
+        <div class="skeleton" style="height:300px"></div>
       </div>
     </div>
   </div>
 
-  <script src="/js/charts.js?v=20261105b"></script>
-  <script src="/js/app.js?v=20261105b"></script>
+  <!-- ===== 右侧抽屉 ===== -->
+  <div class="drawer-mask" id="drawerMask"></div>
+  <div class="drawer" id="drawer">
+    <div class="drawer-head">
+      <div>
+        <div class="dh-title" id="drawerTitle">—</div>
+        <div class="dh-sub" id="drawerSub"></div>
+      </div>
+      <button class="drawer-close" id="drawerClose">×</button>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+  </div>
+
+  <!-- ===== 命令面板 ===== -->
+  <div class="cmd-mask" id="cmdMask">
+    <div class="cmd-panel">
+      <div class="cmd-input-wrap">
+        <svg viewBox="0 0 24 24"><path d="M10 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Zm9.7 2.3-4.2-4.2"/></svg>
+        <input class="cmd-input" id="cmdInput" placeholder="搜索主播、商品、类目，或跳转页面…" />
+        <span class="cmd-esc">ESC</span>
+      </div>
+      <div class="cmd-list" id="cmdList"></div>
+    </div>
+  </div>
+
+  <script src="/js/charts.js?v=20261105c"></script>
+  <script src="/js/insights.js?v=20261105c"></script>
+  <script src="/js/app.js?v=20261105c"></script>
 </body>
 </html>

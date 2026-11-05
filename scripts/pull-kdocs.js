@@ -185,7 +185,10 @@ function archiveFile(file) {  try {
  */
 function fetchByApi(link) {
   const py = process.env.PYTHON || 'python';
-  const args = [path.join(__dirname, 'kdocs_fetch.py'), '--out', INBOX, '--json'];
+  // 结果走临时文件而不是 stdout：从 .bat 启动时 Python 的管道编码可能是 GBK，
+  // 中文文件名传过来会变成乱码，导致"下载成功却找不到文件"。
+  const jsonOut = path.join(os.tmpdir(), 'kdocs_fetch_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7) + '.json');
+  const args = [path.join(__dirname, 'kdocs_fetch.py'), '--out', INBOX, '--json-out', jsonOut];
   if (link.sid) args.push('--sid', link.sid);
   else if (link.fileid) args.push('--fileid', link.fileid);
   else return { ok: false, error: '链接既无 sid 也无 fileid' };
@@ -195,6 +198,20 @@ function fetchByApi(link) {
     encoding: 'utf8',
     timeout: 30 * 60 * 1000
   });
+
+  let parsed = null;
+  try {
+    if (fs.existsSync(jsonOut)) {
+      parsed = JSON.parse(fs.readFileSync(jsonOut, 'utf8'));
+    }
+  } catch (e) {
+    parsed = null;
+  } finally {
+    try { if (fs.existsSync(jsonOut)) fs.unlinkSync(jsonOut); } catch (e) { /* ignore */ }
+  }
+  if (parsed) return parsed;
+
+  // 兜底：老版本没有 --json-out 时仍从 stdout 最后一行取
   const lines = String(r.stdout || '').trim().split('\n').filter((l) => l.trim());
   const last = lines.length ? lines[lines.length - 1] : '';
   try {

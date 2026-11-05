@@ -26,6 +26,15 @@ import time
 import urllib.error
 import urllib.request
 
+# Windows 上从 .bat 启动时，控制台/管道默认编码是 GBK（cp936），
+# 中文文件名输出给上层 Node 后会变成乱码，导致"下载成功但找不到文件"。
+# 这里强制 UTF-8，不依赖 PYTHONUTF8/PYTHONIOENCODING 环境变量。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        pass
+
 COOKIE_SRC = r"%APPDATA%\kingsoft\wps\addons\data\win-i386\cef_high\1.25\kcloudpage\cookies-v3\Network\Cookies"
 PREFS = r"%APPDATA%\kingsoft\wps\addons\data\win-i386\LocalPrefs.json"
 UA = (
@@ -242,6 +251,7 @@ def main() -> int:
     ap.add_argument("--out", default="data/inbox", help="保存目录")
     ap.add_argument("--name", help="覆盖保存的文件名")
     ap.add_argument("--json", action="store_true", help="只输出 JSON")
+    ap.add_argument("--json-out", help="把结果 JSON 写入指定文件（UTF-8），绕开管道编码问题")
     args = ap.parse_args()
 
     result = {"ok": False, "step": "init"}
@@ -296,6 +306,12 @@ def main() -> int:
     except Exception as e:  # noqa: BLE001
         result.update(error=str(e), detail=result.get("step"))
     finally:
+        if args.json_out:
+            try:
+                with open(args.json_out, "w", encoding="utf-8") as f:
+                    f.write(json.dumps(result, ensure_ascii=False))
+            except Exception as e:  # noqa: BLE001
+                result["_json_out_error"] = str(e)
         if args.json:
             print(json.dumps(result, ensure_ascii=False))
         elif result.get("ok"):

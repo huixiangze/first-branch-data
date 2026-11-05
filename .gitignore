@@ -1,0 +1,22 @@
+node_modules/
+
+# 同步落地文件（业务原始表，不进仓库）
+data/inbox/
+data/cache/
+data/imports/.fingerprint.json
+
+# 证书与本地启动脚本
+ssl/
+*.pem
+*.key
+
+# 打包产物
+*.zip
+*.tar.gz
+*.7z
+
+# 系统噪音
+.DS_Store
+Thumbs.db
+desktop.ini
+~$*
