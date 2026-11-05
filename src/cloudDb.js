@@ -18,11 +18,35 @@ let _cfg = null;
 
 function loadConfig() {
   if (_cfg) return _cfg;
+
+  // 1) 整段 JSON（云托管环境变量里直接放）
+  const inline = process.env.DP_CLOUD_JSON;
+  if (inline && inline.trim()) {
+    try {
+      _cfg = JSON.parse(inline);
+      return _cfg;
+    } catch (e) {
+      console.error('[cloud] 环境变量 DP_CLOUD_JSON 不是合法 JSON：' + e.message);
+    }
+  }
+
+  // 2) 本地文件（开发机）
   try {
     _cfg = JSON.parse(fs.readFileSync(CFG_PATH, 'utf8'));
   } catch (e) {
     _cfg = { enabled: false };
   }
+
+  // 3) 零散环境变量覆盖（控制台逐个填更省事）
+  if (process.env.DP_CLOUD_ENDPOINT && process.env.DP_CLOUD_KEY) {
+    _cfg = Object.assign({}, _cfg, {
+      enabled: true,
+      endpoint: process.env.DP_CLOUD_ENDPOINT,
+      publishableKey: process.env.DP_CLOUD_KEY,
+      table: process.env.DP_CLOUD_TABLE || _cfg.table || 'dashboard_module'
+    });
+  }
+
   return _cfg;
 }
 

@@ -15,9 +15,46 @@ const kdocsMeta = require('./src/kdocsMeta');
 const fetcher = require('./src/wpsFetcher');
 
 const PORT = process.env.PORT || 8090;
-const users = JSON.parse(fs.readFileSync(path.join(ROOT, 'config', 'users.json'), 'utf8'));
-const SECRET = users.sessionSecret || 'default-secret';
-const SESSION_HOURS = users.sessionHours || 12;
+
+// ---- 账号配置：优先环境变量（云托管镜像里不含敏感文件），其次 config/users.json ----
+function loadUsersConfig() {
+  const inline = process.env.DP_USERS_JSON;
+  if (inline && inline.trim()) {
+    try {
+      return JSON.parse(inline);
+    } catch (e) {
+      console.error('[config] 环境变量 DP_USERS_JSON 不是合法 JSON：' + e.message);
+      process.exit(1);
+    }
+  }
+  const u = process.env.DP_ADMIN_USER;
+  const p = process.env.DP_ADMIN_PASS;
+  if (u && p) {
+    return {
+      users: [{
+        username: u,
+        password: p,
+        name: process.env.DP_ADMIN_NAME || u,
+        role: process.env.DP_ADMIN_ROLE || '管理员'
+      }],
+      sessionSecret: process.env.DP_SESSION_SECRET || '',
+      sessionHours: Number(process.env.DP_SESSION_HOURS || 12)
+    };
+  }
+  const file = path.join(ROOT, 'config', 'users.json');
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (e) {
+    console.error('[config] 找不到账号配置：' + file);
+    console.error('[config] 云托管请设置环境变量 DP_ADMIN_USER + DP_ADMIN_PASS（推荐），');
+    console.error('[config] 或用 DP_USERS_JSON 传整段 JSON；本地开发可从 config/users.example.json 复制一份。');
+    process.exit(1);
+  }
+}
+
+const users = loadUsersConfig();
+const SECRET = users.sessionSecret || process.env.DP_SESSION_SECRET || 'default-secret';
+const SESSION_HOURS = Number(users.sessionHours || 12);
 
 // 按 CSV 表头识别“表型”，用于在上传时拦住传错的表（例如把商品明细传进主播榜单，覆盖掉正确数据）
 function detectCsvShape(headers) {
@@ -390,8 +427,12 @@ function loadSslOptions() {
 // ---- 启动 + 定时刷新 ----
 store.ensureDirs();
 (async function () {
-  await store.refreshAll(); // 启动时先取一次
-  const cfg = store.loadWpsConfig();
+  try {
+    await store.refreshAll(); // 启动时先取一次
+  } catch (e) {
+    console.error('[startup] 首次取数失败，服务继续启动：' + e.message);
+  }
+  const cfg = store.loadWpsConfig() || {};
   const minutes = (cfg.refreshMinutes || 20);
   setInterval(function () { store.refreshAll().catch(function (e) { console.error(e); }); }, minutes * 60 * 1000);
 

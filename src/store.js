@@ -17,8 +17,13 @@ function ensureDirs() {
   if (!fs.existsSync(imports)) fs.mkdirSync(imports, { recursive: true });
 }
 
+// 容器/云托管里通常没有 wps.json（数据以云库为准），缺失时返回 null 而不是抛错
 function loadWpsConfig() {
-  return JSON.parse(fs.readFileSync(WPS_CONFIG, 'utf8'));
+  try {
+    return JSON.parse(fs.readFileSync(WPS_CONFIG, 'utf8'));
+  } catch (e) {
+    return null;
+  }
 }
 
 function readCache() {
@@ -37,6 +42,11 @@ function writeCache(obj) {
 
 async function refreshAll() {
   const cfg = loadWpsConfig();
+  if (!cfg || !cfg.modules) {
+    // 没有 wps.json：云端部署的正常形态（数据走云数据库），跳过抓取，不算失败
+    console.log('[refresh] 未找到 config/wps.json，跳过金山文档抓取（云端以云数据库为准）');
+    return getModules();
+  }
   const modules = {};
   for (const key of Object.keys(cfg.modules)) {
     try {
