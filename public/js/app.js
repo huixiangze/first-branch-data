@@ -40,7 +40,11 @@
     tableMeta: {},          // moduleKey -> { cols, rows, opts }
     filter: {},             // 主播榜快捷筛选
     cmdIndex: null,         // 命令面板索引
-    _scroll: {}
+    _scroll: {},
+    month: '',              // '' = 各页自动取最新月；'YYYY-MM' = 全局指定月份
+    sync: null,             // /api/sync 返回的同步状态
+    metric: {},             // 主播详情页的指标切换
+    profile: null           // 当前查看的主播名
   };
 
   // ---------- 基础工具 ----------
@@ -58,6 +62,11 @@
     return { value: n.toLocaleString('zh-CN', { maximumFractionDigits: 0 }), unit: '元' };
   }
   function money(v) { return num(v).toLocaleString('zh-CN', { maximumFractionDigits: 2 }); }
+  // 数值本身已经是「万」时，坐标轴直接用纯数字，避免出现「1.0万」这种重复单位
+  function plainNum(v) {
+    var n = Number(v) || 0;
+    return Math.abs(n) >= 1000 ? Math.round(n).toLocaleString('en-US') : String(Math.round(n * 10) / 10);
+  }
   function pct1(v) { var n = Number(v); return (isFinite(n) ? (Math.round(n * 10) / 10) : 0) + '%'; }
   function modules() { return (state.data && state.data.modules) || {}; }
   function deltaHtml(v, unit) {
@@ -90,6 +99,71 @@
     var mm = String(d.getUTCMonth() + 1).padStart(2, '0');
     var dd = String(d.getUTCDate()).padStart(2, '0');
     return d.getUTCFullYear() + '-' + mm + '-' + dd;
+  }
+
+  // ---------- 时间与月份 ----------
+  function relTime(iso) {
+    if (!iso) return '--';
+    var t = new Date(iso).getTime();
+    if (!t || isNaN(t)) return '--';
+    var diff = Date.now() - t;
+    if (diff < 0) diff = 0;
+    var m = Math.floor(diff / 60000);
+    if (m < 1) return '刚刚';
+    if (m < 60) return m + ' 分钟前';
+    var h = Math.floor(m / 60);
+    if (h < 24) return h + ' 小时前';
+    var dd = Math.floor(h / 24);
+    return dd < 30 ? dd + ' 天前' : '很久以前';
+  }
+  function fmtDateTime(iso) {
+    if (!iso) return '--';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '--';
+    return String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + ' ' +
+      String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+  function monthIdx(ym) { return Number(String(ym || '').slice(5, 7)) || 0; }
+  function monthName(ym) {
+    var y = String(ym || '').slice(0, 4), m = monthIdx(ym);
+    if (!m) return ym || '';
+    return (y ? y + '年' : '') + m + ' 月';
+  }
+  function ymOf(v) {
+    var s = String(v == null ? '' : v);
+    var m = s.match(/^(\d{4})-(\d{2})/);
+    return m ? m[1] + '-' + m[2] : '';
+  }
+
+  // 全平台出现过的月份（用于顶部月份选择器）
+  function allMonths() {
+    var set = {};
+    var d = modules();
+    var rank = d.anchorRank || {};
+    if (rank.asOf) set[ymOf(rank.asOf)] = 1;
+    (((d.commodity || {}).days) || []).forEach(function (x) { if (x && x.date) set[ymOf(x.date)] = 1; });
+    (((d.anchorPerformance || {}).sheets) || []).forEach(function (s) { if (s && s.date) set[ymOf(s.date)] = 1; });
+    parseForecastRows(d.forecast || {}).forEach(function (r) { set[r.month] = 1; });
+    if (state.month) set[state.month] = 1;
+    return Object.keys(set).filter(function (k) { return /^\d{4}-\d{2}$/.test(k); }).sort();
+  }
+
+  // 某个视图实际可用的月份；选中的月份不在范围内时退回最新月并标记 fallback
+  function pickMonth(cov) {
+    cov = (cov || []).filter(function (x) { return /^\d{4}-\d{2}$/.test(x); }).sort();
+    if (!cov.length) return { month: '', cov: [], fallback: false };
+    if (state.month && cov.indexOf(state.month) >= 0) return { month: state.month, cov: cov, fallback: false };
+    return { month: cov[cov.length - 1], cov: cov, fallback: !!state.month };
+  }
+  function monthNotice(p, what) {
+    if (!p.fallback) return '';
+    return '<div class="notice"><span class="ni">i</span><span>' + esc(what || '该模块') +
+      '目前只有 <b>' + esc(monthName(p.month)) + '</b> 的明细（源表还没有按月归档历史数据），已自动切到该月。' +
+      '要看 <b>' + esc(monthName(state.month)) + '</b> 需要先补齐那个月的数据。</span></div>';
+  }
+  function anchorMonths() {
+    var rank = modules().anchorRank || {};
+    return rank.asOf ? [ymOf(rank.asOf)] : [];
   }
 
   // ---------- CSV 导出 ----------
@@ -153,11 +227,12 @@
         val = p.value; unit = p.unit;
       }
       var spark = k.spark ? '<div class="kpi-spark">' + CH.spark(k.spark, { color: c }) + '</div>' : '';
-      return '<div class="kpi-card">' +
+      return '<div class="kpi-card' + (k.go ? ' clickable' : '') + (k.spark ? ' has-spark' : '') + '"' + (k.go ? ' data-goto="' + esc(k.go) + '"' : '') + '>' +
         '<div class="kpi-icon" style="background:' + c + '">' + icon(k.icon || 'home') + '</div>' +
         '<div class="kpi-body"><div class="k-title">' + esc(k.title) + '</div>' +
         '<div class="k-val">' + esc(val) + '<span class="unit">' + esc(unit) + '</span></div>' +
-        '<div class="k-sub">' + (k.sub || '') + '</div></div>' + spark + '</div>';
+        '<div class="k-sub">' + (k.sub || '') + '</div></div>' + spark +
+        (k.go ? '<span class="k-go">›</span>' : '') + '</div>';
     }).join('') + '</div>';
   }
   function panel(title, sub, body, tools, cls) {
@@ -320,24 +395,27 @@
     var dod = prev > 0 ? ((cur - prev) / prev) * 100 : 0;
     var activeAnchors = rows.filter(function (r) { return num(r.gmvCum) > 0; }).length;
     var totalGmv = num(s.gmvCum) || sparkVals.reduce(function (a, b) { return a + b; }, 0);
+    var pm = pickMonth(anchorMonths());
 
     var html = viewHead('经营驾驶舱',
       (rank.asOf ? '数据截止 <b>' + esc(rank.asOf) + '</b> · ' : '') +
       rows.length + ' 位主播在册，' + activeAnchors + ' 位本期有产出 · ' + sourceLabel(rank.source),
       '<span class="fresh-dot"><i></i>每 60 秒自动刷新</span>' +
-      '<button class="tbtn" onclick="window.__refresh()">立即刷新</button>');
+      '<button class="tbtn" data-role="refresh">立即刷新</button>');
 
-    // KPI
+    html += monthNotice(pm, '主播结算数据');
+
+    // KPI（点击可跳转到对应页面）
     html += kpiCards([
-      { icon: 'gmv', color: '#2f6fed', title: '累计下播 GMV', money: totalGmv, sub: '本月累计 · ' + activeAnchors + ' 位有产出', spark: sparkVals },
-      { icon: 'anchorPerformance', color: '#7a5cff', title: '当日 GMV', money: cur, sub: deltaHtml(dod) + ' 较前一日', spark: sparkVals.slice(-4) },
-      { icon: 'settle', color: '#12a76c', title: '预估结算 GMV', money: s.settleCum, sub: '整体结算率 ' + pct1(s.calcRate) },
-      { icon: 'rate', color: '#f5871f', title: '平均结算率', value: pct1(s.avgRate), unit: '', sub: '按主播算术平均' }
+      { icon: 'gmv', color: '#2f6fed', title: '累计下播 GMV', money: totalGmv, sub: activeAnchors + ' 位主播有产出', spark: sparkVals, go: 'anchorRank' },
+      { icon: 'anchorPerformance', color: '#7a5cff', title: '当日 GMV', money: cur, sub: deltaHtml(dod) + ' 环比', spark: sparkVals.slice(-4), go: 'anchorPerformance' },
+      { icon: 'settle', color: '#12a76c', title: '预估结算 GMV', money: s.settleCum, sub: '整体 ' + pct1(s.calcRate), go: 'rongpin' },
+      { icon: 'rate', color: '#f5871f', title: '平均结算率', value: pct1(s.avgRate), unit: '', sub: '主播算术均值' }
     ]);
 
     // 趋势
     var trendSvg = CH.line(series.map(function (x) { return { label: x.label, value: wanNum(x.gmv) }; }), {
-      color: '#2f6fed', height: 250, fmt: function (v) { return v + '万'; }, showValue: series.length <= 8
+      color: '#2f6fed', height: 250, fmt: function (v) { return v + '万'; }, yFmt: plainNum, showValue: series.length <= 8
     });
 
     var byCum = rows.slice().sort(function (a, b) { return num(b.gmvCum) - num(a.gmvCum); });
@@ -434,6 +512,8 @@
       (m.asOf ? '数据截止 <b>' + esc(m.asOf) + '</b> · ' : '') + rows.length + ' 位主播 · ' + sourceLabel(m.source),
       '<button class="tbtn" data-role="export-rank">导出全部</button>');
 
+    html += monthNotice(pickMonth(anchorMonths()), '主播结算数据');
+
     // 默认按累计 GMV 降序，避免零产出主播排在最前面
     if (!state.sort.anchorRank) state.sort.anchorRank = { key: 'gmvCum', dir: 'desc' };
 
@@ -449,7 +529,6 @@
     html += '<div class="panel tight"><div class="chips">' + chips.map(function (c) {
       return '<button class="chip-btn' + (f === c[0] ? ' on' : '') + '" data-filter="' + c[0] + '">' + c[1] + '</button>';
     }).join('') + '<span class="tcount" style="margin-left:auto">当前 ' + list.length + ' 位</span></div></div>';
-
     // 图：Top10 + 散点
     var byCum = list.slice().sort(function (a, b) { return num(b.gmvCum) - num(a.gmvCum); }).slice(0, 10);
     if (byCum.length) {
@@ -473,7 +552,11 @@
     var baseRate = num(s.calcRate) || avgRate;   // 整体口径更适合做色阶基准
     var cols = [
       { key: 'rank', label: '#', cls: 'mono', render: function (r, i) { return i + 1; } },
-      { key: 'anchor', label: '主播', render: function (r) { return '<b>' + esc(r.anchor) + '</b>'; } },
+      {
+        key: 'anchor', label: '主播', render: function (r) {
+          return '<b class="a-link" data-profile="' + esc(r.anchor) + '" title="打开完整分析页">' + esc(r.anchor) + '</b>';
+        }
+      },
       { key: 'org', label: '所属公司' },
       { key: 'type', label: '类型' },
       { key: 'gmv', label: '当日GMV(万)', cls: 'mono', render: function (r) { return wan(r.gmv); } },
@@ -496,7 +579,7 @@
       { key: 'settleCum', label: '结算GMV(万)', cls: 'mono', render: function (r) { return wan(r.settleCum); } }
     ];
     html += '<div class="panel"><div class="panel-head"><div class="ph-title">主播明细</div>' +
-      '<span class="ph-sub">点击任意一行查看 30 天走势</span></div>' +
+      '<span class="ph-sub">点主播名打开完整分析页 · 点行号任意处快速预览</span></div>' +
       dataTable('anchorRank', cols, list, {
         exportName: '主播榜单', pageSize: 20, empty: '当前筛选下没有主播',
         onRow: function (r) { openAnchor(r.anchor); }
@@ -510,6 +593,179 @@
         }) + '</div>';
     }
     return html;
+  }
+
+  // ---------- 主播个人分析页 ----------
+  var PROFILE_METRICS = {
+    gmv: { name: '每日 GMV', color: '#2f6fed', conv: function (x) { return wanNum(x.gmv); }, fmt: function (v) { return v + '万'; } },
+    settle: { name: '每日结算 GMV', color: '#12a76c', conv: function (x) { return wanNum(x.settle); }, fmt: function (v) { return v + '万'; } },
+    rate: { name: '每日结算率', color: '#f5871f', conv: function (x) { return Math.round(x.rate * 10) / 10; }, fmt: function (v) { return v + '%'; } }
+  };
+
+  // 把 daily(结算额) + rateDaily(结算率) 还原成每日 GMV
+  function anchorSeries(r) {
+    var out = [];
+    (r.daily || []).forEach(function (v, i) {
+      var rate = Number((r.rateDaily || [])[i]) || 0;
+      var g = IN.dayGmv(v, rate);
+      if (g > 0 || num(v) > 0) out.push({ idx: i, label: (i + 1) + '日', gmv: g, settle: num(v), rate: rate });
+    });
+    return out;
+  }
+
+  function viewAnchorProfile() {
+    var name = state.profile;
+    var rank = modules().anchorRank || {};
+    var rows = (rank.rows || []).filter(function (r) { return r.anchor; });
+    if (!rows.length) {
+      return viewHead('主播详情', '暂无数据') + panel('', '', '<div class="empty">还没有主播数据</div>');
+    }
+    var r = rows.filter(function (x) { return x.anchor === name; })[0];
+    if (!r) {
+      return viewHead('主播详情', '未找到「' + esc(name || '') + '」') +
+        panel('', '', '<div class="empty">没有这位主播的数据，可能名字有误。<br/><br/>' +
+          '<button class="tbtn" data-goto="anchorRank">← 返回主播榜单</button></div>');
+    }
+
+    var sorted = rows.slice().sort(function (a, b) { return num(b.gmvCum) - num(a.gmvCum); });
+    var rankNo = sorted.map(function (x) { return x.anchor; }).indexOf(name) + 1;
+    var rated = rows.filter(function (x) { return num(x.gmvCum) > 0 && num(x.rate) > 0; });
+    var avgRate = rated.length ? rated.reduce(function (a, x) { return a + num(x.rate); }, 0) / rated.length : 0;
+    var avgGmv = rows.reduce(function (a, x) { return a + num(x.gmvCum); }, 0) / (rows.length || 1);
+    var top1 = sorted[0] || {};
+
+    var series = anchorSeries(r);
+    var mk = PROFILE_METRICS[state.metric[name]] ? state.metric[name] : 'gmv';
+    var meta = PROFILE_METRICS[mk];
+
+    var html = viewHead('主播详情 · ' + esc(r.anchor),
+      esc(r.org || '') + (r.type ? ' · ' + esc(r.type) : '') +
+      ' · 累计排名 <b>NO.' + rankNo + '</b> / ' + rows.length + ' 位' +
+      (rank.asOf ? ' · 数据截止 <b>' + esc(rank.asOf) + '</b>' : ''),
+      '<button class="tbtn" data-role="profile-back">← 返回榜单</button>' +
+      '<button class="tbtn" data-role="profile-export">导出明细</button>');
+
+    html += monthNotice(pickMonth(anchorMonths()), '主播结算数据');
+
+    html += kpiCards([
+      { icon: 'gmv', color: '#2f6fed', title: '累计下播 GMV', money: r.gmvCum, sub: '全员均值 ' + wan(avgGmv) + ' 万' },
+      { icon: 'anchorPerformance', color: '#7a5cff', title: '当日 GMV', money: r.gmv, sub: '最新一日' },
+      {
+        icon: 'rate', color: num(r.rate) >= avgRate ? '#12a76c' : '#e5484d', title: '结算率',
+        value: pct1(r.rate), unit: '', sub: '全员均值 ' + pct1(avgRate)
+      },
+      {
+        icon: 'settle', color: '#f5871f', title: '累计结算 GMV', money: r.settleCum,
+        sub: '占全公司 ' + pct1(num(r.settleCum) / (num((rank.summary || {}).settleCum) || 1) * 100)
+      }
+    ]);
+
+    // 指标切换
+    var mkChips = Object.keys(PROFILE_METRICS).map(function (k) {
+      return '<button class="chip-btn' + (k === mk ? ' on' : '') + '" data-metric="' + k + '">' + PROFILE_METRICS[k].name + '</button>';
+    }).join('');
+    html += '<div class="panel tight"><div class="chips">' + mkChips +
+      '<span class="tcount" style="margin-left:auto">共 ' + series.length + ' 天有数据</span></div></div>';
+
+    // 主趋势
+    if (series.length >= 2) {
+      html += '<div class="panel chart-panel"><div class="panel-head"><div class="ph-title">' +
+        esc(meta.name) + ' <span class="ph-sub">' + esc(r.anchor) + '</span></div>' +
+        '<div class="ph-tools"><button class="tbtn sm" data-role="img">导出图片</button></div></div>' +
+        CH.line(series.map(function (x) { return { label: x.label, value: meta.conv(x) }; }), {
+          color: meta.color, height: 250, fmt: meta.fmt, yFmt: mk === 'rate' ? plainNum : plainNum, showValue: series.length <= 8
+        }) + '</div>';
+    } else {
+      html += '<div class="panel"><div class="empty">这位主播目前只有 1 天数据，暂时画不出趋势</div></div>';
+    }
+
+    // 与团队对比：用「合计」而不是「人均」——人均只有本人的零头，线会全贴在底部看不出东西
+    var cmpMetric = mk === 'settle' ? 'settle' : 'gmv';
+    var myLine = [], allLine = [];
+    for (var ci = 0; ci < (r.daily || []).length; ci++) {
+      var tot = 0;
+      rows.forEach(function (x) {
+        var rr = Number((x.rateDaily || [])[ci]) || 0;
+        var g = cmpMetric === 'settle' ? num((x.daily || [])[ci]) : IN.dayGmv((x.daily || [])[ci], rr);
+        if (g > 0) tot += g;
+      });
+      var mineG = cmpMetric === 'settle' ? num((r.daily || [])[ci]) : IN.dayGmv((r.daily || [])[ci], Number((r.rateDaily || [])[ci]) || 0);
+      myLine.push(wanNum(mineG));
+      allLine.push(wanNum(tot));
+    }
+    var mySum = 0, allSum = 0;
+    series.forEach(function (x) { mySum += myLine[x.idx] || 0; allSum += allLine[x.idx] || 0; });
+    var share = allSum > 0 ? (mySum / allSum) * 100 : 0;
+
+    if (series.length >= 2) {
+      var cmpSeries = [
+        {
+          name: esc(r.anchor), color: meta.color,
+          points: series.map(function (x) { return { label: x.label, value: myLine[x.idx] }; })
+        },
+        {
+          name: '全员合计', color: '#b3bcc9', dashed: true,
+          points: series.map(function (x) { return { label: x.label, value: allLine[x.idx] }; })
+        }
+      ];
+      html += '<div class="panel chart-panel"><div class="panel-head"><div class="ph-title">' +
+        (mk === 'rate' ? 'GMV 与团队对比' : '与团队对比') +
+        ' <span class="ph-sub">单位万元 · 该主播在该区间占全员 ' + pct1(share) + '</span></div></div>' +
+        '<div class="legend">' + cmpSeries.map(function (s2) {
+          return '<span><i style="background:' + s2.color + '"></i>' + s2.name + '</span>';
+        }).join('') +
+        (mk === 'rate' ? '<span class="tip-inline">结算率是按天算的比率，与总量不同尺度，所以这里改看 GMV</span>' : '') + '</div>' +
+        CH.multiLine(cmpSeries, { height: 250, fmt: function (v) { return v + '万'; }, yFmt: plainNum }) + '</div>';
+    }
+
+    // 与均值 / 头部的对比表
+    var cmpRows = [
+      { name: '该主播 · ' + r.anchor, gmv: num(r.gmvCum), rate: num(r.rate) },
+      { name: '全员均值', gmv: avgGmv, rate: avgRate },
+      { name: '第一名 · ' + (top1.anchor || '—'), gmv: num(top1.gmvCum), rate: num(top1.rate) }
+    ];
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">位置对比</div>' +
+      '<span class="ph-sub">累计 GMV 排名 NO.' + rankNo + ' / ' + rows.length + '</span></div>' +
+      dataTable('profile_cmp', [
+        { key: 'name', label: '对象', render: function (x) { return '<b>' + esc(x.name) + '</b>'; } },
+        { key: 'gmv', label: '累计GMV(万)', cls: 'mono', render: function (x) { return wan(x.gmv); } },
+        {
+          key: 'rate', label: '结算率', cls: 'mono', render: function (x) {
+            var v = num(x.rate);
+            return '<span style="color:' + (v >= avgRate ? '#12a76c' : '#e5484d') + ';font-weight:700">' + (v > 0 ? pct1(v) : '—') + '</span>';
+          }
+        }
+      ], cmpRows, { pageSize: 5 }) + '</div>';
+
+    // 每日明细
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">每日明细</div>' +
+      '<span class="ph-sub">GMV = 结算额 ÷ 当日结算率</span></div>' +
+      dataTable('profile_daily_' + r.anchor, [
+        { key: 'day', label: '日期' },
+        { key: 'gmv', label: 'GMV(元)', cls: 'mono', render: function (x) { return money(x.gmv); } },
+        { key: 'settle', label: '结算GMV(元)', cls: 'mono', render: function (x) { return money(x.settle); } },
+        {
+          key: 'rate', label: '结算率', cls: 'mono', render: function (x) {
+            var v = num(x.rate);
+            return '<div class="rate-cell"><span>' + (v > 0 ? pct1(v) : '—') + '</span>' +
+              '<span class="rate-bar"><i style="width:' + Math.max(2, Math.min(100, v)) + '%;background:' +
+              (v >= avgRate ? '#12a76c' : '#e5484d') + '"></i></span></div>';
+          }
+        }
+      ], series.map(function (x) { return { day: x.label, gmv: x.gmv, settle: x.settle, rate: x.rate }; }),
+        { pageSize: 15, exportName: '主播明细_' + r.anchor, searchPlaceholder: '筛选日期…' }) + '</div>';
+
+    return html;
+  }
+
+  function openProfile(name) {
+    if (!name) return;
+    state.profile = name;
+    state.current = 'anchor';
+    try { history.replaceState(null, '', '#anchor/' + encodeURIComponent(name)); } catch (e) { }
+    renderNav();
+    renderView(false);
+    closeDrawer();
   }
 
   // ---------- 主播详情抽屉 ----------
@@ -532,7 +788,8 @@
     var activeDaily = days.filter(function (x) { return x.gmv > 0; });
     var activeRate = activeDaily.filter(function (x) { return x.rate > 0; });
 
-    var body = '<div class="mini-kpis">' +
+    var body = '<button class="tbtn primary" data-profile="' + esc(name) + '" style="margin-bottom:14px">打开完整分析页 →</button>' +
+      '<div class="mini-kpis">' +
       '<div class="mini-kpi"><div class="mk-label">累计下播 GMV</div><div class="mk-val">' + wan(r.gmvCum) + '<span style="font-size:12px;color:#7b8798"> 万</span></div><div class="mk-sub">全员平均 ' + wan(avgGmv) + ' 万</div></div>' +
       '<div class="mini-kpi"><div class="mk-label">当日 GMV</div><div class="mk-val">' + wan(r.gmv) + '<span style="font-size:12px;color:#7b8798"> 万</span></div><div class="mk-sub">最新一日</div></div>' +
       '<div class="mini-kpi"><div class="mk-label">结算率</div><div class="mk-val" style="color:' + (num(r.rate) >= avgRate ? '#12a76c' : '#e5484d') + '">' + pct1(r.rate) + '</div><div class="mk-sub">全员均值 ' + pct1(avgRate) + '</div></div>' +
@@ -573,20 +830,51 @@
   // ---------- 商品结构 ----------
   function viewCommodity() {
     var m = modules().commodity || {};
-    var t = m.total || {};
+    var allT = m.total || {};
     var cats = m.categories || [];
-    if (!cats.length && !(m.products || []).length) {
+    var days = (m.days || []).slice().sort(function (a, b) { return String(a.date) < String(b.date) ? -1 : 1; });
+    if (!cats.length && !(m.products || []).length && !days.length) {
       return viewHead('商品结构', '暂无数据') + panel('', '', '<div class="empty">商品明细尚未入库</div>');
     }
+
+    // 月度口径：逐日明细有真实支付/结算，可以按月份精确汇总
+    var dayMonths = [];
+    days.forEach(function (x) { var k = ymOf(x.date); if (k && dayMonths.indexOf(k) < 0) dayMonths.push(k); });
+    var pm = pickMonth(dayMonths);
+    var scope = pm.month ? days.filter(function (x) { return ymOf(x.date) === pm.month; }) : days;
+    var t = { pay: 0, settle: 0, items: 0, rate: 0 };
+    scope.forEach(function (x) {
+      t.pay += num(x.pay); t.settle += num(x.settle); t.items += num(x.items);
+    });
+    t.rate = t.pay > 0 ? (t.settle / t.pay) * 100 : 0;
+    var scopeLabel = scope.length ? (monthName(pm.month) + ' · ' + scope[0].date + ' ~ ' + scope[scope.length - 1].date) : '全周期';
+
+    // 类目 / 商品 / 店铺三张表是整表聚合，没有按日拆分，标注清楚避免误读
+    var allRange = days.length ? (days[0].date + ' ~ ' + days[days.length - 1].date) : '';
+
     var html = viewHead('商品结构',
-      '明细 ' + (t.items || 0).toLocaleString('zh-CN') + ' 行 · ' + cats.length + ' 个一级类目 · ' + ((m.products || []).length) + ' 个重点商品');
+      scopeLabel + ' · 明细 ' + Math.round(t.items).toLocaleString('zh-CN') + ' 行 · ' + cats.length + ' 个一级类目',
+      '<span class="tip-inline" title="类目/商品/店铺三张聚合表由整本工作簿汇总，无法按日拆分">聚合表口径：' + esc(allRange) + '</span>');
+
+    html += monthNotice(pm, '商品明细');
 
     html += kpiCards([
-      { icon: 'commodity', color: '#2f6fed', title: '支付 GMV', money: t.pay, sub: '全部商品合计' },
+      { icon: 'commodity', color: '#2f6fed', title: '支付 GMV', money: t.pay, sub: esc(monthName(pm.month)) + '合计' },
       { icon: 'settle', color: '#12a76c', title: '结算 GMV', money: t.settle, sub: '风控后' },
-      { icon: 'rate', color: '#f5871f', title: '整体结算率', value: pct1(t.rate), unit: '', sub: '结算 / 支付' },
-      { icon: 'gmv', color: '#7a5cff', title: '明细行数', value: (t.items || 0).toLocaleString('zh-CN'), unit: '行', sub: '商品级明细' }
+      { icon: 'rate', color: '#f5871f', title: '本月结算率', value: pct1(t.rate), unit: '', sub: '结算 / 支付' },
+      { icon: 'gmv', color: '#7a5cff', title: '明细行数', value: Math.round(t.items).toLocaleString('zh-CN'), unit: '行', sub: '当月商品级明细' }
     ]);
+
+    // 每日支付 / 结算走势（按月）
+    if (scope.length >= 2) {
+      html += '<div class="panel chart-panel"><div class="panel-head"><div class="ph-title">每日支付 vs 结算 <span class="ph-sub">万元 · ' +
+        esc(monthName(pm.month)) + '</span></div><div class="ph-tools"><button class="tbtn sm" data-role="img">导出图片</button></div></div>' +
+        '<div class="legend"><span><i style="background:#2f6fed"></i>支付 GMV</span><span><i style="background:#12a76c"></i>结算 GMV</span></div>' +
+        CH.multiLine([
+          { name: '支付', color: '#2f6fed', points: scope.map(function (x) { return { label: String(x.date).slice(5), value: Math.round(num(x.pay) / 1000) / 10 }; }) },
+          { name: '结算', color: '#12a76c', dashed: true, points: scope.map(function (x) { return { label: String(x.date).slice(5), value: Math.round(num(x.settle) / 1000) / 10 }; }) }
+        ], { height: 240, fmt: function (v) { return v + '万'; }, yFmt: plainNum }) + '</div>';
+    }
 
     // 类目结构
     var catSorted = cats.slice().sort(function (a, b) { return num(b.pay) - num(a.pay); });
@@ -598,20 +886,20 @@
         '<span class="lr-val">' + wan(c.pay) + ' 万 · ' + pct1(c.rate) + '</span></div>';
     }).join('');
 
-    var payParts = amountParts(t.pay);
+    var payParts = amountParts(allT.pay);
     html += '<div class="grid-2b">';
-    html += '<div class="panel"><div class="panel-head"><div class="ph-title">支付 GMV 类目占比</div></div>' +
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">支付 GMV 类目占比 <span class="ph-sub">整表 ' + esc(allRange) + '</span></div></div>' +
       '<div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap">' +
       CH.donutChart(ring, { size: 200, centerTop: payParts.value, centerSub: '支付 GMV(' + payParts.unit + ')' }) +
       '<div style="flex:1;min-width:200px">' + legend + '</div></div></div>';
-    html += chartPanel('类目结算率对比', '整体 ' + pct1(t.rate) + '，低于此线的类目拉低了综合毛利',
+    html += chartPanel('类目结算率对比', '整体 ' + pct1(allT.rate) + '，低于此线的类目拉低了综合毛利',
       CH.hBars(catSorted.map(function (c) {
-        return { label: c.name.length > 10 ? c.name.slice(0, 10) + '…' : c.name, value: num(c.rate), color: num(c.rate) < num(t.rate) * 0.7 ? '#e5484d' : '#12a76c' };
+        return { label: c.name.length > 10 ? c.name.slice(0, 10) + '…' : c.name, value: num(c.rate), color: num(c.rate) < num(allT.rate) * 0.7 ? '#e5484d' : '#12a76c' };
       }).slice(0, 12), { unit: '%', labelW: 130, fmt: function (v) { return v.toFixed(1) + '%'; } }), {});
     html += '</div>';
 
     // 类目明细表
-    html += '<div class="panel"><div class="panel-head"><div class="ph-title">类目明细</div><span class="ph-sub">' + cats.length + ' 个类目</span></div>' +
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">类目明细</div><span class="ph-sub">' + cats.length + ' 个类目 · 整表聚合</span></div>' +
       dataTable('commodity_cat', [
         { key: 'name', label: '一级类目' },
         { key: 'items', label: '商品行数', cls: 'mono' },
@@ -621,7 +909,7 @@
           key: 'rate', label: '结算率', cls: 'mono', render: function (r) {
             var v = num(r.rate);
             return '<div class="rate-cell"><span>' + pct1(v) + '</span><span class="rate-bar"><i style="width:' +
-              Math.max(2, Math.min(100, v)) + '%;background:' + (v >= num(t.rate) ? '#12a76c' : '#e5484d') + '"></i></span></div>';
+              Math.max(2, Math.min(100, v)) + '%;background:' + (v >= num(allT.rate) ? '#12a76c' : '#e5484d') + '"></i></span></div>';
           }
         }
       ], cats, { exportName: '商品类目明细', pageSize: 20 }) + '</div>';
@@ -651,12 +939,20 @@
   // ---------- 主播业绩（每日快照） ----------
   function viewAnchorPerformance() {
     var m = modules().anchorPerformance || {};
-    var sheets = m.sheets || [];
-    if (!sheets.length) {
+    var allSheets = m.sheets || [];
+    if (!allSheets.length) {
       return viewHead('主播业绩', '暂无快照') + panel('', '', '<div class="empty">还没有每日快照数据</div>');
     }
+    var mon = [];
+    allSheets.forEach(function (s) { var k = ymOf(s.date); if (k && mon.indexOf(k) < 0) mon.push(k); });
+    var pm = pickMonth(mon);
+    var sheets = pm.month ? allSheets.filter(function (s) { return ymOf(s.date) === pm.month; }) : allSheets;
+    if (!sheets.length) sheets = allSheets;
+
     var html = viewHead('主播业绩',
-      sheets.length + ' 个每日快照 · ' + (m.asOf ? '截止 ' + esc(m.asOf) : ''));
+      sheets.length + ' 个每日快照 · ' + (pm.month ? esc(monthName(pm.month)) : '全部') +
+      (m.asOf ? ' · 截止 ' + esc(m.asOf) : ''));
+    html += monthNotice(pm, '主播业绩快照');
 
     function pickCol(headers, names) {
       var i, j;
@@ -676,7 +972,7 @@
       var cS = pickCol(s.headers, ['风控后结算GMV(预估拼接)(元)', '风控后结算GMV(元)']);
       var tg = 0, ts = 0;
       (s.rows || []).forEach(function (r) { if (cG) tg += num(r[cG]); if (cS) ts += num(r[cS]); });
-      return { name: s.name, date: s.date, gmv: tg, settle: ts, count: (s.rows || []).length };
+      return { name: s.name, date: s.date, gmv: tg, settle: ts, count: (s.rows || []).length, hasSettle: ts > 0 };
     });
     var maxG = Math.max.apply(null, cards.map(function (c) { return c.gmv; }).concat([1]));
 
@@ -689,7 +985,8 @@
         return '<div style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px">' +
           '<b>' + esc(c.name) + '</b><span style="color:#7b8798">' + esc(c.date || '') + '</span></div>' +
           '<div style="display:flex;justify-content:space-between;font-size:12px;color:#7b8798;margin-bottom:5px">' +
-          '<span>' + c.count + ' 人</span><span>' + wan(c.gmv) + ' 万 · 结算 ' + wan(c.settle) + ' 万</span></div>' +
+          '<span>' + c.count + ' 人</span><span>' + wan(c.gmv) + ' 万' +
+          (c.hasSettle ? ' · 结算 ' + wan(c.settle) + ' 万' : ' · 结算未出数') + '</span></div>' +
           '<div style="height:7px;border-radius:4px;background:#eef1f5"><div style="height:100%;width:' + p + '%;border-radius:4px;background:linear-gradient(90deg,#2f6fed,#5b8dff)"></div></div></div>';
       }).join('') + '</div>';
     html += '</div>';
@@ -747,7 +1044,9 @@
     months.sort();
     var withActual = rows.filter(function (r) { return r.actual > 0; }).map(function (r) { return r.month; }).sort();
     var defMonth = withActual.length ? withActual[withActual.length - 1] : months[months.length - 1];
-    var mon = (state.filter.forecastMonth && months.indexOf(state.filter.forecastMonth) >= 0) ? state.filter.forecastMonth : defMonth;
+    var mon = (state.month && months.indexOf(state.month) >= 0) ? state.month
+      : (state.filter.forecastMonth && months.indexOf(state.filter.forecastMonth) >= 0) ? state.filter.forecastMonth
+        : defMonth;
 
     var mine = rows.filter(function (r) { return r.dept === dept && r.month === mon; })
       .sort(function (a, b) { return a.date < b.date ? -1 : 1; });
@@ -792,7 +1091,7 @@
         CH.multiLine([
           { name: '预估', color: '#b9c6e8', dashed: true, points: pts.map(function (r) { return { label: r.date.slice(5), value: Math.round(r.est * 10) / 10 }; }) },
           { name: '实际', color: '#2f6fed', points: pts.map(function (r) { return { label: r.date.slice(5), value: Math.round(r.actual * 10) / 10 }; }) }
-        ], { height: 280, fmt: function (v) { return v + '万'; } }) + '</div>';
+        ], { height: 280, fmt: function (v) { return v + '万'; }, yFmt: plainNum }) + '</div>';
     }
 
     // 部门横向对比（仅在有多部门明细时显示）
@@ -863,6 +1162,7 @@
     }
     var active = daily.filter(function (x) { return num(x.settle) > 0; });
     var html = viewHead('预估结算', '每日预估结算进度 · ' + (rank.asOf ? '截止 ' + esc(rank.asOf) : ''));
+    html += monthNotice(pickMonth(anchorMonths()), '预估结算');
 
     var total = active.reduce(function (a, x) { return a + num(x.settle); }, 0);
     html += kpiCards([
@@ -877,20 +1177,22 @@
 
     html += chartPanel('每日预估结算 GMV', '万元', CH.line(active.map(function (x) {
       return { label: x.day, value: wanNum(x.settle) };
-    }), { color: '#12a76c', height: 250, fmt: function (v) { return v + '万'; }, showValue: active.length <= 8 }));
+    }), { color: '#12a76c', height: 250, fmt: function (v) { return v + '万'; }, yFmt: plainNum, showValue: active.length <= 8 }));
 
-    html += '<div class="panel"><div class="panel-head"><div class="ph-title">每日明细</div><span class="ph-sub">1~30 日</span></div>' +
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">每日明细</div><span class="ph-sub">已出数据 ' +
+      active.length + ' 天（未出数的日期不列）</span></div>' +
       dataTable('rongpin_daily', [
         { key: 'day', label: '日期' },
         { key: 'settle', label: '预估结算GMV(元)', cls: 'mono', render: function (r) { return money(r.settle); } },
         { key: 'rate', label: '当日结算率', cls: 'mono', render: function (r) { return num(r.rate) > 0 ? pct1(r.rate) : '—'; } }
-      ], daily, { exportName: '预估结算_每日', pageSize: 15 }) + '</div>';
+      ], active, { exportName: '预估结算_每日', pageSize: 15 }) + '</div>';
     return html;
   }
 
   var VIEWS = {
     home: viewHome,
     anchorRank: viewAnchorRank,
+    anchor: viewAnchorProfile,
     anchorPerformance: viewAnchorPerformance,
     commodity: viewCommodity,
     forecast: viewForecast,
@@ -906,7 +1208,8 @@
     Object.keys(groups).forEach(function (g) {
       html += '<div class="nav-group">' + esc(g) + '</div>';
       groups[g].forEach(function (m) {
-        html += '<div class="nav-item' + (m.key === state.current ? ' active' : '') + '" data-key="' + m.key + '">' +
+        var on = m.key === state.current || (state.current === 'anchor' && m.key === 'anchorRank');
+        html += '<div class="nav-item' + (on ? ' active' : '') + '" data-key="' + m.key + '">' +
           icon(m.key) + '<span>' + esc(m.label) + '</span></div>';
       });
     });
@@ -923,7 +1226,9 @@
     var content = $('content');
     var prevTop = keepScroll ? content.scrollTop : 0;
     var fn = VIEWS[state.current] || VIEWS.home;
-    var title = (MODULES.filter(function (m) { return m.key === state.current; })[0] || {}).label || '经营驾驶舱';
+    var title = state.current === 'anchor'
+      ? ('主播详情 · ' + (state.profile || ''))
+      : ((MODULES.filter(function (m) { return m.key === state.current; })[0] || {}).label || '经营驾驶舱');
     var html;
     try {
       html = fn();
@@ -934,6 +1239,7 @@
     content.innerHTML = html;
     $('crumb').textContent = title;
     content.scrollTop = prevTop;
+    renderMonthSelect();
   }
 
   function switchModule(key) {
@@ -957,7 +1263,13 @@
   function applyHash() {
     var hs = parseHash();
     if (!hs) return;
-    if (hs.view !== state.current) {
+    if (hs.view === 'anchor' && !hs.arg) hs.view = 'anchorRank';   // #anchor 没带名字时回榜单
+    var changed = hs.view !== state.current;
+    if (hs.view === 'anchor') {
+      if (hs.arg !== state.profile) changed = true;
+      state.profile = hs.arg;
+    }
+    if (changed) {
       state.current = hs.view;
       renderNav();
       renderView(false);
@@ -968,11 +1280,136 @@
   }
 
   window.__refresh = function () {
+    var btn = document.querySelector('[data-role="refresh"]');
+    if (btn) { btn.disabled = true; btn.textContent = '刷新中…'; }
     fetch('/api/refresh', { method: 'POST' })
       .then(function (r) { return r.json(); })
-      .then(function () { return fetchData(true); })
-      .catch(function () { fetchData(true); });
+      .then(function () { return Promise.all([fetchData(true), fetchSync()]); })
+      .then(function () { toast('数据已刷新', 'ok'); })
+      .catch(function () { toast('刷新失败，请稍后再试', 'bad'); fetchData(true); })
+      .then(function () { if (btn) { btn.disabled = false; btn.textContent = '立即刷新'; } });
   };
+
+  // ---------- 同步状态 / 月份选择 / 轻提示 ----------
+  function toast(msg, type) {
+    var el = $('toast');
+    if (!el) return;
+    el.textContent = msg;
+    el.className = 'toast show' + (type ? ' ' + type : '');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function () { el.className = 'toast'; }, 2600);
+  }
+
+  function renderSyncChip() {
+    var s = state.sync;
+    var el = $('syncTime'), ageEl = $('syncAge'), chip = $('syncChip');
+    if (!el || !chip) return;
+    if (!s || !s.lastPullAt) {
+      el.textContent = '--';
+      if (ageEl) ageEl.textContent = '';
+      chip.className = 'sync-chip unknown';
+      chip.title = '暂时读不到同步时间';
+      return;
+    }
+    el.textContent = fmtDateTime(s.lastPullAt);
+    if (ageEl) ageEl.textContent = '· ' + relTime(s.lastPullAt);
+    var mins = (Date.now() - new Date(s.lastPullAt).getTime()) / 60000;
+    chip.className = 'sync-chip ' + (mins > 120 ? 'stale' : 'fresh');
+    chip.title = '上次拉取 ' + fmtDateTime(s.lastPullAt) + '（' + relTime(s.lastPullAt) + '）· 点击查看详情';
+  }
+
+  function fetchSync() {
+    return fetch('/api/sync?_t=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { if (j && j.ok) { state.sync = j; renderSyncChip(); } })
+      .catch(function () { });
+  }
+
+  function renderSyncModal() {
+    var s = state.sync || {};
+    var mods = s.modules || [];
+    $('syncSub').textContent = s.lastPullAt
+      ? ('上次拉取检查 ' + fmtDateTime(s.lastPullAt) + '（' + relTime(s.lastPullAt) + '）· 内容无变化时会跳过下载')
+      : '暂无同步记录';
+
+    var html = '<div class="sync-sum">' +
+      '<div class="ss-item"><div class="ss-k">上次拉取检查</div><div class="ss-v">' + esc(fmtDateTime(s.lastPullAt)) + '</div><div class="ss-s">' + esc(relTime(s.lastPullAt)) + '</div></div>' +
+      '<div class="ss-item"><div class="ss-k">最后写入云库</div><div class="ss-v">' + esc(fmtDateTime(s.latestWriteAt)) + '</div><div class="ss-s">' + esc(relTime(s.latestWriteAt)) + '</div></div>' +
+      '<div class="ss-item"><div class="ss-k">云数据库</div><div class="ss-v">' + (s.cloudEnabled ? '已连接' : '未配置') + '</div><div class="ss-s">' +
+      (s.cloudEnabled ? '数据以云库为准' : '页面可能没有任何数据') + '</div></div>' +
+      '</div>';
+
+    html += '<div class="sec-title">各模块最后写入时间</div>';
+    if (mods.length) {
+      html += '<table class="tbl compact"><thead><tr><th>模块</th><th>写入时间</th><th>数据截止</th><th>距今</th></tr></thead><tbody>' +
+        mods.map(function (m) {
+          return '<tr><td>' + esc(m.label) + '</td><td class="mono">' + esc(fmtDateTime(m.updatedAt)) +
+            '</td><td>' + esc(m.asOf || '—') + '</td><td>' + esc(relTime(m.updatedAt)) + '</td></tr>';
+        }).join('') + '</tbody></table>';
+    } else {
+      html += '<div class="empty">暂无模块时间记录</div>';
+    }
+
+    if (s.pull && s.pull.links && s.pull.links.length) {
+      html += '<div class="sec-title">拉取链接</div>';
+      s.pull.links.forEach(function (l) {
+        var bad = l.fail > 0;
+        html += '<div class="pull-row"><span class="pr-name">' + esc(l.name) + '</span>' +
+          '<span class="pr-state ' + (bad ? 'bad' : 'ok') + '">' +
+          (bad ? '已暂停 · 连续失败 ' + l.fail + ' 次（' + esc(l.error || '未知原因') + '）' : '正常') + '</span>' +
+          '<span class="pr-time">' + esc(fmtDateTime(l.at)) + '</span></div>';
+      });
+    } else {
+      html += '<div class="notice" style="margin-top:14px"><span class="ni">i</span><span>' +
+        '当前部署在云端，真正的「拉取」由你本机的同步助手执行，这里显示的是它把数据写进云库的时间。</span></div>';
+    }
+
+    html += '<div class="modal-foot"><span class="muted-sm">自动刷新：页面每 60 秒拉一次云库；同步助手每 ' +
+      (s.refreshMinutes || 20) + ' 分钟检查一次源文档。</span>' +
+      '<button class="tbtn primary" data-role="refresh">立即刷新</button></div>';
+
+    $('syncBody').innerHTML = html;
+  }
+
+  function openSync() {
+    renderSyncModal();
+    $('syncMask').classList.add('show');
+    fetchSync().then(renderSyncModal);
+  }
+  function closeSync() { $('syncMask').classList.remove('show'); }
+
+  function renderMonthSelect() {
+    var sel = $('monthSelect');
+    if (!sel) return;
+    var months = allMonths().slice().reverse();
+    var html = '<option value="">最新月份</option>' + months.map(function (m) {
+      return '<option value="' + m + '">' + esc(monthName(m)) + '</option>';
+    }).join('');
+    if (sel.getAttribute('data-sig') !== html) {
+      sel.innerHTML = html;
+      sel.setAttribute('data-sig', html);
+    }
+    sel.value = state.month || '';
+  }
+
+  // ---------- 图表悬停浮层 ----------
+  function bindChartTip() {
+    var tip = $('chartTip');
+    if (!tip) return;
+    document.addEventListener('mousemove', function (e) {
+      var el = e.target && e.target.closest ? e.target.closest('[data-tip]') : null;
+      if (!el) { tip.classList.remove('show'); return; }
+      var txt = el.getAttribute('data-tip');
+      if (tip.textContent !== txt) tip.textContent = txt;
+      tip.classList.add('show');
+      var x = e.clientX + 14, y = e.clientY - 12;
+      var w = tip.offsetWidth, h = tip.offsetHeight;
+      if (x + w > window.innerWidth - 10) x = e.clientX - w - 14;
+      if (y - h < 8) y = e.clientY + 20;
+      tip.style.left = x + 'px';
+      tip.style.top = y + 'px';
+    });
+  }
 
   // ---------- 事件 ----------
   function attachHandlers() {
@@ -980,10 +1417,33 @@
     document.addEventListener('click', function (e) {
       var t = e.target;
 
+      // 打开主播完整分析页（表格里的主播名 / 抽屉里的入口按钮）
+      var pf = t.closest ? t.closest('[data-profile]') : null;
+      if (pf) {
+        if (e.stopPropagation) e.stopPropagation();
+        openProfile(pf.getAttribute('data-profile'));
+        return;
+      }
+
+      // 主播详情页：切换观察指标
+      var mchip = t.closest ? t.closest('[data-metric]') : null;
+      if (mchip) {
+        state.metric[state.profile] = mchip.getAttribute('data-metric');
+        renderView(true);
+        return;
+      }
+
       // 通用按钮
       var btn = t.closest ? t.closest('[data-role]') : null;
       if (btn) {
         var role = btn.getAttribute('data-role');
+        if (role === 'refresh') { window.__refresh(); return; }
+        if (role === 'profile-back') { switchModule('anchorRank'); return; }
+        if (role === 'profile-export') {
+          var pmeta = state.tableMeta['profile_daily_' + state.profile];
+          if (pmeta) downloadCSV(pmeta.cols, pmeta.rows, '主播明细_' + state.profile + '.csv');
+          return;
+        }
         if (role === 'export') {
           var mod = btn.getAttribute('data-mod');
           var meta = state.tableMeta[mod];
@@ -1022,7 +1482,9 @@
       // 业绩预估：月份 / 部门切换
       var fcm = t.closest ? t.closest('[data-fc]') : null;
       if (fcm) {
-        state.filter.forecastMonth = fcm.getAttribute('data-fc');
+        // 与顶部月份选择器保持同源，否则两处会各说各话
+        state.month = fcm.getAttribute('data-fc');
+        state.filter.forecastMonth = state.month;
         renderView(true);
         return;
       }
@@ -1099,6 +1561,13 @@
     });
 
     document.addEventListener('change', function (e) {
+      // 顶部月份筛选
+      if (e.target && e.target.id === 'monthSelect') {
+        state.month = e.target.value || '';
+        Object.keys(state.page).forEach(function (k) { state.page[k] = 1; });
+        renderView(true);
+        return;
+      }
       var sel = e.target.closest ? e.target.closest('select[data-role="pagesize"]') : null;
       if (!sel) return;
       var m2 = sel.getAttribute('data-mod');
@@ -1110,6 +1579,11 @@
     // 抽屉
     $('drawerClose').onclick = closeDrawer;
     $('drawerMask').onclick = closeDrawer;
+
+    // 同步状态
+    $('syncChip').onclick = openSync;
+    $('syncClose').onclick = closeSync;
+    $('syncMask').onclick = function (e) { if (e.target === $('syncMask')) closeSync(); };
 
     // 侧栏
     $('collapseBtn').onclick = function () {
@@ -1192,13 +1666,7 @@
     if (!it) return;
     closeCmd();
     if (it.type === 'page') { switchModule(it.val); return; }
-    if (it.type === 'anchor') {
-      state.current = 'anchorRank';
-      renderNav();
-      renderView(false);
-      setTimeout(function () { openAnchor(it.val); }, 60);
-      return;
-    }
+    if (it.type === 'anchor') { openProfile(it.val); return; }
     if (it.type === 'product' || it.type === 'cat') {
       state.current = 'commodity';
       state.search[it.type === 'product' ? 'commodity_prod' : 'commodity_cat'] = it.val;
@@ -1221,7 +1689,17 @@
         $('cmdMask').classList.contains('show') ? closeCmd() : openCmd();
         return;
       }
-      if (e.key === 'Escape') { closeCmd(); closeDrawer(); return; }
+      if (e.key === 'Escape') { closeCmd(); closeDrawer(); closeSync(); return; }
+
+      // 数字键 1~6 快速切页（输入框里不触发）
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && /^[1-6]$/.test(e.key)) {
+        var tag = (document.activeElement && document.activeElement.tagName) || '';
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        var mi = parseInt(e.key, 10) - 1;
+        if (MODULES[mi]) switchModule(MODULES[mi].key);
+        return;
+      }
+
       if (!$('cmdMask').classList.contains('show')) return;
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
@@ -1281,8 +1759,14 @@
 
   function startPolling() {
     if (state.pollTimer) clearInterval(state.pollTimer);
-    state.pollTimer = setInterval(function () { fetchData(false); fetchFreshness(); }, 60000);
+    state.pollTimer = setInterval(function () {
+      fetchData(false);
+      fetchFreshness();
+      fetchSync();
+      renderSyncChip();
+    }, 60000);
     fetchFreshness();
+    fetchSync();
   }
 
   function tickClock() {
@@ -1319,10 +1803,14 @@
     $('userName').textContent = user.name || user.username;
     $('avatar').textContent = (user.name || user.username || '?').charAt(0);
     var hs = parseHash();
-    if (hs) state.current = hs.view;
+    if (hs) {
+      state.current = (hs.view === 'anchor' && !hs.arg) ? 'anchorRank' : hs.view;
+      if (hs.view === 'anchor') state.profile = hs.arg;
+    }
     renderNav();
     fetchData(true).then(function () {
       if (hs && hs.arg && hs.view === 'anchorRank') openAnchor(hs.arg);
+      if (hs && hs.arg && hs.view === 'anchor') renderView(false);
     });
     startPolling();
     window.addEventListener('hashchange', applyHash);
@@ -1342,7 +1830,9 @@
     $('logoutBtn').onclick = logout;
     attachHandlers();
     bindCmd();
+    bindChartTip();
     setInterval(tickClock, 30000); tickClock();
+    setInterval(renderSyncChip, 20000);   // 相对时间（几分钟前）跟着走
 
     fetch('/api/me?_t=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' })
       .then(function (r) { return r.json(); })

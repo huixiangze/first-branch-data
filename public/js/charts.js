@@ -7,6 +7,10 @@
   function esc(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
+  // 鼠标悬停提示（由 app.js 的全局浮层读取，替代原生 <title> 的 1 秒延迟）
+  function dtip(s) {
+    return ' data-tip="' + esc(String(s == null ? '' : s)).replace(/"/g, '&quot;') + '"';
+  }
   function uid() { return 'g' + Math.random().toString(36).slice(2, 9); }
 
   // 数量级友好的上限：1 / 2 / 2.5 / 5 / 10 × 10^n
@@ -27,6 +31,19 @@
   function clip(s, n) {
     s = String(s == null ? '' : s);
     return s.length > n ? s.slice(0, n) + '…' : s;
+  }
+
+  // 标签排布：按最小间距贪心保留，末尾那个优先级最高（实在挤就挤掉前一个）
+  function placeLabels(idx, X, lastIdx, minGap) {
+    var out = [];
+    for (var i = 0; i < idx.length; i++) {
+      if (!out.length || X(idx[i]) - X(out[out.length - 1]) >= minGap) out.push(idx[i]);
+    }
+    if (out[out.length - 1] !== lastIdx) {
+      while (out.length > 1 && X(lastIdx) - X(out[out.length - 1]) < minGap) out.pop();
+      out.push(lastIdx);
+    }
+    return out;
   }
 
   // ---------- 横向条形图（保留原签名） ----------
@@ -50,7 +67,8 @@
       var text = fmt ? fmt(it.value) : it.value + unit;
       svg += '<text x="0" y="' + (y + 20) + '" font-size="13" fill="#1f2733">' + esc(clip(it.label, 14)) + '</text>';
       svg += '<rect x="' + labelW + '" y="' + (y + 6) + '" width="' + barArea + '" height="18" rx="9" fill="#eef1f5"/>';
-      svg += '<rect x="' + labelW + '" y="' + (y + 6) + '" width="' + w + '" height="18" rx="9" fill="' + color + '"><title>' + esc(it.label) + '：' + esc(text) + '</title></rect>';
+      svg += '<rect x="' + labelW + '" y="' + (y + 6) + '" width="' + w + '" height="18" rx="9" fill="' + color + '"' +
+        dtip(it.label + '：' + text) + '><title>' + esc(it.label) + '：' + esc(text) + '</title></rect>';
       svg += '<text x="' + (680 - valW + 6) + '" y="' + (y + 20) + '" font-size="13" font-weight="700" fill="#1f2733">' + esc(text) + '</text>';
     });
     svg += '</svg>';
@@ -77,7 +95,8 @@
       var x = pad + i * slot + (slot - bw) / 2;
       var y = base - h;
       var color = it.color || PALETTE[i % PALETTE.length];
-      svg += '<rect x="' + x + '" y="' + y + '" width="' + bw + '" height="' + Math.max(1, h) + '" rx="5" fill="' + color + '"><title>' + esc(it.label) + '：' + esc(it.value) + unit + '</title></rect>';
+      svg += '<rect x="' + x + '" y="' + y + '" width="' + bw + '" height="' + Math.max(1, h) + '" rx="5" fill="' + color + '"' +
+        dtip(it.label + '：' + it.value + unit) + '><title>' + esc(it.label) + '：' + esc(it.value) + unit + '</title></rect>';
       svg += '<text x="' + (x + bw / 2) + '" y="' + (y - 6) + '" font-size="12" font-weight="700" text-anchor="middle" fill="#1f2733">' + esc(it.value) + unit + '</text>';
       svg += '<text x="' + (x + bw / 2) + '" y="' + (base + 16) + '" font-size="12" text-anchor="middle" fill="#8a94a6">' + esc(clip(it.label, 8)) + '</text>';
     });
@@ -114,6 +133,7 @@
     var max = Math.max.apply(null, vals.concat([0]));
     var top = niceMax(max * 1.08);
     var color = opts.color || PALETTE[0];
+    var yfmt = opts.yFmt || fmtShort;   // 数值本身已是「万」时，轴上不要再加万，否则出现 1.0万
     var gid = uid();
 
     function X(i) { return L + (points.length === 1 ? iw / 2 : (i * iw) / (points.length - 1)); }
@@ -130,7 +150,7 @@
       var v = (top / ticks) * t;
       var y = Y(v);
       svg += '<line x1="' + L + '" y1="' + y + '" x2="' + (W - R) + '" y2="' + y + '" stroke="#eef1f5" stroke-width="1"/>';
-      svg += '<text x="' + (L - 8) + '" y="' + (y + 4) + '" font-size="11" text-anchor="end" fill="#98a2b3">' + esc(fmtShort(v)) + '</text>';
+      svg += '<text x="' + (L - 8) + '" y="' + (y + 4) + '" font-size="11" text-anchor="end" fill="#98a2b3">' + esc(yfmt(v)) + '</text>';
     }
 
     // 面积
@@ -160,12 +180,22 @@
       }
     });
 
-    // x 轴标签
-    points.forEach(function (p, k) {
-      if (k % step !== 0 && k !== points.length - 1) return;
-      var anc2 = k === 0 ? 'start' : (k === points.length - 1 ? 'end' : 'middle');
+    // x 轴标签：按最小间距贪心保留，末尾一定显示且不与前一个挤在一起
+    var lastK = points.length - 1;
+    var keep = [];
+    for (var lk = 0; lk < points.length; lk += step) keep.push(lk);
+    if (keep[keep.length - 1] !== lastK) keep.push(lastK);
+    keep = placeLabels(keep, X, lastK, 54);
+    keep.forEach(function (k) {
+      var anc2 = k === 0 ? 'start' : (k === lastK ? 'end' : 'middle');
       svg += '<text x="' + X(k) + '" y="' + (H - 12) + '" font-size="11" text-anchor="' + anc2 + '" fill="#98a2b3">' +
-        esc(clip(p.label, 6)) + '</text>';
+        esc(clip(points[k].label, 6)) + '</text>';
+    });
+
+    // 透明命中层：鼠标移上去立刻出浮层，不用等 <title> 的 1 秒延迟
+    points.forEach(function (p, k) {
+      svg += '<circle cx="' + X(k) + '" cy="' + Y(vals[k]) + '" r="' + (points.length > 40 ? 4 : 9) + '" fill="transparent"' +
+        dtip(p.label + '　' + (opts.fmt ? opts.fmt(vals[k]) : fmtShort(vals[k]))) + '/>';
     });
 
     svg += '</svg>';
@@ -210,7 +240,8 @@
     sorted.forEach(function (p) {
       var color = p.color || PALETTE[0];
       var r = p.r || 5;
-      svg += '<circle cx="' + X(p.x) + '" cy="' + Y(p.y) + '" r="' + r + '" fill="' + color + '" fill-opacity="0.72" stroke="#fff" stroke-width="1.2">' +
+      svg += '<circle cx="' + X(p.x) + '" cy="' + Y(p.y) + '" r="' + r + '" fill="' + color + '" fill-opacity="0.72" stroke="#fff" stroke-width="1.2"' +
+        dtip(p.label + '　' + (opts.xLabel || 'x') + ' ' + fmtShort(p.x) + ' · ' + (opts.yLabel || 'y') + ' ' + p.y) + '>' +
         '<title>' + esc(p.label) + '\n' + esc(opts.xLabel || 'x') + '：' + esc(fmtShort(p.x)) + '\n' + esc(opts.yLabel || 'y') + '：' + esc(p.y) + '</title></circle>';
     });
     svg += '</svg>';
@@ -236,7 +267,8 @@
       var color = it.color || PALETTE[i % PALETTE.length];
       svg += '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="none" stroke="' + color + '" stroke-width="' + stroke + '"' +
         ' stroke-dasharray="' + Math.max(0.5, len - 2) + ' ' + (c - Math.max(0.5, len - 2)) + '"' +
-        ' stroke-dashoffset="' + (-acc) + '" transform="rotate(-90 ' + cx + ' ' + cy + ')">' +
+        ' stroke-dashoffset="' + (-acc) + '" transform="rotate(-90 ' + cx + ' ' + cy + ')"' +
+        dtip(it.label + '　' + fmtShort(it.value) + '（' + (frac * 100).toFixed(1) + '%）') + '>' +
         '<title>' + esc(it.label) + '：' + esc(fmtShort(it.value)) + '（' + (frac * 100).toFixed(1) + '%）</title></circle>';
       acc += len;
     });
@@ -266,6 +298,7 @@
       s.points.forEach(function (p) { if ((Number(p.value) || 0) > max) max = Number(p.value) || 0; });
     });
     var top = niceMax(max * 1.08);
+    var yfmt = opts.yFmt || fmtShort;
 
     function X(i) { return L + (n === 1 ? iw / 2 : (i * iw) / (n - 1)); }
     function Y(v) { return T + ih - ((Number(v) || 0) / top) * ih; }
@@ -275,7 +308,7 @@
     for (var t = 0; t <= 4; t++) {
       var v = (top / 4) * t, gy = Y(v);
       svg += '<line x1="' + L + '" y1="' + gy + '" x2="' + (W - R) + '" y2="' + gy + '" stroke="#eef1f5"/>';
-      svg += '<text x="' + (L - 8) + '" y="' + (gy + 4) + '" font-size="11" text-anchor="end" fill="#98a2b3">' + esc(fmtShort(v)) + '</text>';
+      svg += '<text x="' + (L - 8) + '" y="' + (gy + 4) + '" font-size="11" text-anchor="end" fill="#98a2b3">' + esc(yfmt(v)) + '</text>';
     }
 
     series.forEach(function (s, si) {
@@ -297,14 +330,29 @@
       });
     });
 
-    // x 轴标签（取第一组）
+    // x 轴标签（取第一组）：末尾优先，且与相邻标签至少留 40px
     var base = series[0].points;
     var step2 = base.length > 16 ? Math.ceil(base.length / 10) : 1;
-    base.forEach(function (p, i) {
-      if (i % step2 !== 0 && i !== base.length - 1) return;
-      var anc = i === 0 ? 'start' : (i === base.length - 1 ? 'end' : 'middle');
-      svg += '<text x="' + X(i) + '" y="' + (H - 12) + '" font-size="11" text-anchor="' + anc + '" fill="#98a2b3">' + esc(clip(p.label, 7)) + '</text>';
+    var lastI = base.length - 1;
+    var keepI = [];
+    for (var li = 0; li < base.length; li += step2) keepI.push(li);
+    if (keepI[keepI.length - 1] !== lastI) keepI.push(lastI);
+    keepI = placeLabels(keepI, X, lastI, 54);
+    keepI.forEach(function (i2) {
+      var anc = i2 === 0 ? 'start' : (i2 === lastI ? 'end' : 'middle');
+      svg += '<text x="' + X(i2) + '" y="' + (H - 12) + '" font-size="11" text-anchor="' + anc + '" fill="#98a2b3">' + esc(clip(base[i2].label, 7)) + '</text>';
     });
+
+    // 命中层：整列热区，一次提示该日期下所有系列
+    var bandW = Math.max(6, iw / Math.max(1, n - 1));
+    for (var hi = 0; hi < n; hi++) {
+      var txt = base[hi] ? base[hi].label : ('第 ' + (hi + 1) + ' 项');
+      series.forEach(function (s) {
+        if (!s.points[hi]) return;
+        txt += '　' + s.name + ' ' + (opts.fmt ? opts.fmt(s.points[hi].value) : fmtShort(s.points[hi].value));
+      });
+      svg += '<rect x="' + (X(hi) - bandW / 2) + '" y="' + T + '" width="' + bandW + '" height="' + ih + '" fill="transparent"' + dtip(txt) + '/>';
+    }
 
     svg += '</svg>';
     return svg;

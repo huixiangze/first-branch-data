@@ -5,6 +5,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const crypto = require('crypto');
 
 const ROOT = __dirname;
@@ -123,6 +124,83 @@ function verifyToken(token) {
 
 function findUser(username) {
   return (users.users || []).find(function (u) { return u.username === username; });
+}
+
+// ---- 同步状态（页面顶部「上次拉取时间」的数据源）----
+const MODULE_LABELS = {
+  home: '经营驾驶舱', anchorRank: '主播榜单', anchorPerformance: '主播业绩',
+  commodity: '商品结构', forecast: '业绩预估', rongpin: '预估结算'
+};
+
+function readJsonSafe(p) {
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) { return null; }
+}
+
+// 本机同步助手的拉取记录（云托管环境没有这个目录，返回 null 即可）
+function readPullState() {
+  const dir = path.join(os.homedir(), '.dp-sync');
+  const st = readJsonSafe(path.join(dir, 'pull-state.json'));
+  if (!st || !st.links) return null;
+  const links = Object.keys(st.links).map(function (id) {
+    const v = st.links[id] || {};
+    return {
+      id: id,
+      name: v.name || id,
+      at: v.at || null,
+      fail: Number(v.fail || 0),
+      error: v.lastError || ''
+    };
+  });
+  const stamps = links.filter(function (l) { return l.at && !l.fail; })
+    .map(function (l) { return new Date(l.at).getTime(); })
+    .filter(function (t) { return t > 0; });
+  return {
+    dir: dir,
+    at: stamps.length ? new Date(Math.max.apply(null, stamps)).toISOString() : null,
+    links: links
+  };
+}
+
+async function buildSyncReport() {
+  const merged = await store.getModulesMerged();
+  let times = {};
+  if (cloudDb.isEnabled()) {
+    try { times = await cloudDb.listTimes(); } catch (e) { times = {}; }
+  }
+  const cloudKeys = Object.keys(times);
+  const mods = Object.keys(merged.modules || {}).map(function (k) {
+    const m = merged.modules[k] || {};
+    if (!m || !Object.keys(m).length) return null;                    // 空模块（历史占位）不展示
+    if (cloudKeys.length && cloudKeys.indexOf(k) < 0) return null;    // 只报云库里真实存在的模块
+    return {
+      module: k,
+      label: MODULE_LABELS[k] || k,
+      updatedAt: times[k] || null,
+      asOf: m.asOf || null,
+      source: m.source || null
+    };
+  }).filter(Boolean).sort(function (a, b) { return String(a.updatedAt || '').localeCompare(String(b.updatedAt || '')); });
+
+  const seen = mods.map(function (x) { return x.updatedAt ? new Date(x.updatedAt).getTime() : 0; })
+    .filter(function (t) { return t > 0; });
+  const latest = seen.length ? new Date(Math.max.apply(null, seen)).toISOString() : null;
+
+  const pull = readPullState();
+  // 「上次拉取」优先用同步助手的实际拉取时间；拿不到就退化成云库最后写入时间
+  const candidates = [latest, pull && pull.at ? pull.at : null]
+    .map(function (x) { return x ? new Date(x).getTime() : 0; })
+    .filter(function (t) { return t > 0; });
+
+  return {
+    ok: true,
+    now: new Date().toISOString(),
+    lastPullAt: candidates.length ? new Date(Math.max.apply(null, candidates)).toISOString() : null,
+    latestWriteAt: latest,
+    pull: pull,
+    modules: mods,
+    cloudEnabled: cloudDb.isEnabled(),
+    refreshMinutes: 20
+  };
 }
 
 // ---- 客户端 IP（兼容反代 x-forwarded-for）----
@@ -260,6 +338,17 @@ async function handleApi(req, res, pathname) {
     if (!username) { sendJson(res, 401, { ok: false, error: '未登录' }); return; }
     const data = await store.getModulesMerged();
     sendJson(res, 200, data);
+    return;
+  }
+
+  if (pathname === '/api/sync') {
+    const username = getSessionUser(req);
+    if (!username) { sendJson(res, 401, { ok: false, error: '未登录' }); return; }
+    try {
+      sendJson(res, 200, await buildSyncReport());
+    } catch (e) {
+      sendJson(res, 200, { ok: false, error: e.message, modules: [] });
+    }
     return;
   }
 
