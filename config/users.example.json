@@ -1,0 +1,13 @@
+{
+  "_说明": "复制为 config/users.json 后填入真实账号；password 为明文，仓库已忽略该文件，切勿提交",
+  "users": [
+    {
+      "username": "your-account",
+      "password": "CHANGE-ME",
+      "name": "显示名",
+      "role": "管理员"
+    }
+  ],
+  "sessionSecret": "改成一段随机字符串，例如 openssl rand -hex 24 的输出",
+  "sessionHours": 12
+}
