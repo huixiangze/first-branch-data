@@ -15,6 +15,7 @@ const url = require('url');
 
 const CFG_PATH = path.join(__dirname, '..', 'config', 'cloud.json');
 let _cfg = null;
+let _src = '未配置';
 
 function loadConfig() {
   if (_cfg) return _cfg;
@@ -24,6 +25,7 @@ function loadConfig() {
   if (inline && inline.trim()) {
     try {
       _cfg = JSON.parse(inline);
+      _src = '环境变量 DP_CLOUD_JSON';
       return _cfg;
     } catch (e) {
       console.error('[cloud] 环境变量 DP_CLOUD_JSON 不是合法 JSON：' + e.message);
@@ -33,8 +35,10 @@ function loadConfig() {
   // 2) 本地文件（开发机）
   try {
     _cfg = JSON.parse(fs.readFileSync(CFG_PATH, 'utf8'));
+    _src = 'config/cloud.json';
   } catch (e) {
     _cfg = { enabled: false };
+    _src = '未配置';
   }
 
   // 3) 零散环境变量覆盖（控制台逐个填更省事）
@@ -45,9 +49,22 @@ function loadConfig() {
       publishableKey: process.env.DP_CLOUD_KEY,
       table: process.env.DP_CLOUD_TABLE || _cfg.table || 'dashboard_module'
     });
+    _src = '环境变量 DP_CLOUD_ENDPOINT / DP_CLOUD_KEY';
   }
 
   return _cfg;
+}
+
+// 启动自检用：不泄露密钥，只报来源与目标
+function describe() {
+  const c = loadConfig();
+  return {
+    enabled: isEnabled(),
+    source: _src,
+    endpoint: c.endpoint || '',
+    table: c.table || '',
+    hasKey: !!c.publishableKey
+  };
 }
 
 function isEnabled() {
@@ -151,6 +168,7 @@ async function listTimes() {
 
 module.exports = {
   isEnabled: isEnabled,
+  describe: describe,
   loadConfig: loadConfig,
   listModules: listModules,
   listTimes: listTimes,

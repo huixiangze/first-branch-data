@@ -17,10 +17,13 @@ const fetcher = require('./src/wpsFetcher');
 const PORT = process.env.PORT || 8090;
 
 // ---- 账号配置：优先环境变量（云托管镜像里不含敏感文件），其次 config/users.json ----
+let USERS_SOURCE = 'config/users.json';
+
 function loadUsersConfig() {
   const inline = process.env.DP_USERS_JSON;
   if (inline && inline.trim()) {
     try {
+      USERS_SOURCE = '环境变量 DP_USERS_JSON';
       return JSON.parse(inline);
     } catch (e) {
       console.error('[config] 环境变量 DP_USERS_JSON 不是合法 JSON：' + e.message);
@@ -30,6 +33,7 @@ function loadUsersConfig() {
   const u = process.env.DP_ADMIN_USER;
   const p = process.env.DP_ADMIN_PASS;
   if (u && p) {
+    USERS_SOURCE = '环境变量 DP_ADMIN_USER';
     return {
       users: [{
         username: u,
@@ -55,6 +59,22 @@ function loadUsersConfig() {
 const users = loadUsersConfig();
 const SECRET = users.sessionSecret || process.env.DP_SESSION_SECRET || 'default-secret';
 const SESSION_HOURS = Number(users.sessionHours || 12);
+
+// ---- 启动自检：把「配置从哪来」打进日志，避免云端排查靠猜 ----
+function logSelfCheck() {
+  const n = (users.users || []).length;
+  console.log('[config] 账号来源：' + USERS_SOURCE + '（' + n + ' 个账号：' +
+    (users.users || []).map(function (x) { return x.username; }).join(', ') + '）');
+  console.log('[config] 会话密钥：' + (users.sessionSecret || process.env.DP_SESSION_SECRET ? '已设置' : '未设置，使用默认值（不安全）') +
+    '；有效期 ' + SESSION_HOURS + ' 小时');
+  const c = cloudDb.describe();
+  if (c.enabled) {
+    console.log('[cloud] 云数据库：已启用 · 来源 ' + c.source + ' · ' + c.endpoint + ' · 表 ' + c.table);
+  } else {
+    console.log('[cloud] 云数据库：未启用（来源 ' + c.source + '）→ 页面将没有数据。');
+    console.log('[cloud] 请在环境变量里设置 DP_CLOUD_ENDPOINT + DP_CLOUD_KEY + DP_CLOUD_TABLE，或提供 config/cloud.json');
+  }
+}
 
 // 按 CSV 表头识别“表型”，用于在上传时拦住传错的表（例如把商品明细传进主播榜单，覆盖掉正确数据）
 function detectCsvShape(headers) {
@@ -434,6 +454,8 @@ store.ensureDirs();
   }
   const cfg = store.loadWpsConfig() || {};
   const minutes = (cfg.refreshMinutes || 20);
+
+  logSelfCheck();
   setInterval(function () { store.refreshAll().catch(function (e) { console.error(e); }); }, minutes * 60 * 1000);
 
   const ssl = loadSslOptions();
