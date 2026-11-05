@@ -25,3 +25,6 @@ desktop.ini
 config/users.json
 config/wps.json
 config/cloud.json
+
+# 部署用的环境变量清单（含明文口令，勿入库）
+部署-环境变量.txt
