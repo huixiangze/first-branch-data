@@ -562,8 +562,12 @@
       var out = '<div class="view-title">预估结算</div><div class="view-sub">预估结算明细（日更） · ' + sourceLabel(m.source) + ' · ' + esc(m.updated || '-') + '</div>';
       var structured = '';
       structured += '<div class="grid-2b">';
-      structured += chartPanel('融品预估结算GMV对比(万)', '', window.chartHelpers.vBars(filterMonth(m.settlement || [], 'rongpin'), { unit: ' 万' }));
-      structured += chartPanel('融品月目标完成度(%)', '', window.chartHelpers.vBars(filterMonth(m.completion || [], 'rongpin'), { unit: '%' }));
+      structured += chartPanel('融品预估结算GMV对比(万)', '', window.chartHelpers.vBars(
+        filterMonth((m.settlement || []).map(function (x) { return { label: x.name, value: x.value, month: x.month }; }), 'rongpin'),
+        { unit: ' 万' }));
+      structured += chartPanel('融品月目标完成度(%)', '', window.chartHelpers.vBars(
+        filterMonth((m.completion || []).map(function (x) { return { label: x.name, value: x.value, month: x.month }; }), 'rongpin'),
+        { unit: '%' }));
       structured += '</div>';
       var dcols = [
         { key: 'anchor', label: '主播昵称' }, { key: 'gmv', label: '直播间GMV(万)', cls: 'mono' },
@@ -651,7 +655,7 @@
     var content = $('content');
     var fn = VIEWS[state.current] || VIEWS.home;
     var title = (MODULES.filter(function (m) { return m.key === state.current; })[0] || {}).label || '首页';
-    var html = fn(state.data || {});
+    var html = fn((state.data && state.data.modules) || {});
     var upd = state.data && state.data.updatedAt ? new Date(state.data.updatedAt).toLocaleString('zh-CN') : '未知';
     html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><span class="refresh-tip"><span class="dot"></span>数据每 20 分钟自动刷新 · 上次更新：' + upd + '</span><button class="btn-login" style="width:auto;padding:8px 16px" onclick="window.__refresh()">立即刷新</button></div>' + html;
     content.innerHTML = html;

@@ -19,6 +19,15 @@
     "anchorRank": {
       "source": "csv",
       "label": "主播榜单",
+      "rowMap": {
+        "anchor": "主播名",
+        "org": "所属公司",
+        "type": "主播类型",
+        "gmv": "下播GMV",
+        "gmvCum": "下播GMV累计",
+        "settleCum": "预估结算GMV累计",
+        "rate": "结算率"
+      },
       "wps": {
         "url": "https://www.kdocs.cn/l/ccKD5XSnpXm0",
         "sheet": "",

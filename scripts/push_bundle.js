@@ -85,17 +85,19 @@ async function main() {
     console.log('[ok] home        4 项核心指标');
   }
 
-  if (b.daily1 || b.daily2) {
+  const dailies = b.dailies || [b.daily1, b.daily2].filter(Boolean);
+  if (dailies.length) {
     const perf = {
       source: 'cloud',
       asOf: rank ? rank.asOf : '',
       refreshedAt: now,
-      sheets: [b.daily1, b.daily2].filter(Boolean).map(function (s) {
+      sheets: dailies.map(function (s) {
         return { name: s.name, date: s.date, headers: s.headers, rows: s.rows };
       })
     };
     await cloudDb.upsertModule('anchorPerformance', perf);
-    console.log('[ok] anchorPerformance  ' + perf.sheets.length + ' 个日快照');
+    console.log('[ok] anchorPerformance  ' + perf.sheets.length + ' 个日快照（' +
+      perf.sheets.map(function (s) { return s.name; }).join('/') + '）');
   }
 
   console.log('全部完成，时间 ' + now);

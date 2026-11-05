@@ -19,6 +19,29 @@ const users = JSON.parse(fs.readFileSync(path.join(ROOT, 'config', 'users.json')
 const SECRET = users.sessionSecret || 'default-secret';
 const SESSION_HOURS = users.sessionHours || 12;
 
+// 按 CSV 表头识别“表型”，用于在上传时拦住传错的表（例如把商品明细传进主播榜单，覆盖掉正确数据）
+function detectCsvShape(headers) {
+  const h = (headers || []).join('|');
+  if (/商品名称|卖家昵称|商品一级类目|卖家ID|商品二级类目/.test(h)) {
+    return {
+      type: 'commodity',
+      label: '商品明细表（数据来源）',
+      hint: '这类明细请用整本 xlsx 导入（放到「下载」文件夹由同步助手自动处理），页面上的「商品结构」页展示的就是它的聚合结果。'
+    };
+  }
+  if (/直播日期|分成系数|主播ID|风控后结算GMV/.test(h) && !/预估结算GMV累计/.test(h)) {
+    return {
+      type: 'dailySheet',
+      label: '单日明细表（1日 / 2日 …）',
+      hint: '主播榜单要用「汇总」sheet：含 所属公司 / 主播名 / 下播GMV累计 / 预估结算GMV累计 / 结算率。单日明细属于「主播业绩」，不要传到这里。'
+    };
+  }
+  if (/场次|开播时间|下播时间/.test(h) && !/所属公司|所属机构/.test(h)) {
+    return { type: 'liveDetail', label: '场次明细表', hint: '该表不是主播汇总表，请改用含「主播名 / 所属公司 / 下播GMV」的汇总 sheet 导出的 CSV。' };
+  }
+  return null;
+}
+
 function sha256(s) { return crypto.createHash('sha256').update(String(s)).digest('hex'); }
 function hmac(s) { return crypto.createHmac('sha256', SECRET).update(s).digest('hex'); }
 
@@ -220,15 +243,60 @@ async function handleApi(req, res, pathname) {
     }
     const content = String(b.content || '');
     if (!content.trim()) { sendJson(res, 400, { ok: false, error: '内容为空' }); return; }
+
+    // —— 上传前先校验表头，防止把别的 sheet 传进来覆盖正确数据 ——
+    const grid = fetcher.parseCsv(content.replace(/^\uFEFF/, ''));
+    const csvHeaders = ((grid[0] || []).map(function (h) { return String(h || '').trim(); })).filter(Boolean);
+    if (!csvHeaders.length) {
+      sendJson(res, 400, { ok: false, error: 'CSV 表头为空，请确认导出时包含表头行。' });
+      return;
+    }
+    const shape = detectCsvShape(csvHeaders);
+    const modLabel = (cfg.modules[moduleKey] && cfg.modules[moduleKey].label) || moduleKey;
+    // 单日明细表允许进「主播业绩」，其余一律拦截
+    const shapeAllowed = shape && (shape.type === moduleKey || (shape.type === 'dailySheet' && moduleKey === 'anchorPerformance'));
+    if (shape && !shapeAllowed) {
+      sendJson(res, 400, {
+        ok: false,
+        detected: shape.type,
+        headers: csvHeaders.slice(0, 6),
+        error: '已拦截：这张表是「' + shape.label + '」，不属于「' + modLabel + '」。' +
+          '为避免覆盖现有数据，本次没有写入。' + (shape.hint ? ' ' + shape.hint : '')
+      });
+      return;
+    }
     const importsDir = path.join(ROOT, 'data', 'imports');
     fs.mkdirSync(importsDir, { recursive: true });
     const safeName = moduleKey.replace(/[^A-Za-z0-9_-]/g, '') + '.csv';
     try {
-      fs.writeFileSync(path.join(importsDir, safeName), '﻿' + content, 'utf8');
-      // 用 CSV 源计算该模块 payload（不触发 WPS 网络请求）
-      const csvCfg = Object.assign({}, cfg.modules[moduleKey], { source: 'csv', csv: safeName });
+      // 先写临时文件试解析，校验通过再落到正式文件名，避免坏表污染本地 CSV
+      const tmpName = '_upload_' + moduleKey + '.tmp.csv';
+      fs.writeFileSync(path.join(importsDir, tmpName), '﻿' + content, 'utf8');
+      const csvCfg = Object.assign({}, cfg.modules[moduleKey], { source: 'csv', csv: tmpName });
       const payload = await fetcher.fetchModule(moduleKey, csvCfg, cfg.wpsGlobal);
-      if (!payload) { sendJson(res, 400, { ok: false, error: 'CSV 解析后无有效数据' }); return; }
+      const dropTmp = function () { try { fs.unlinkSync(path.join(importsDir, tmpName)); } catch (e) {} };
+
+      if (!payload) { dropTmp(); sendJson(res, 400, { ok: false, error: 'CSV 解析后无有效数据，未写入。' }); return; }
+
+      // 二次校验：主播类模块必须能识别出主播名，否则表型仍不对（如「复核」页）
+      if (['anchorRank', 'anchorPerformance', 'rongpin'].indexOf(moduleKey) >= 0) {
+        const rs = payload.rows || (payload.detail && payload.detail.rows) || [];
+        const named = rs.filter(function (r) {
+          const n = r && r.anchor ? String(r.anchor).trim() : '';
+          return n && n !== '合计' && n !== '总计';
+        }).length;
+        if (!rs.length || named === 0) {
+          dropTmp();
+          sendJson(res, 400, {
+            ok: false,
+            error: '已拦截：这张表里没有识别到「主播名」列，不是「' + modLabel + '」需要的数据，未写入。'
+          });
+          return;
+        }
+      }
+
+      fs.writeFileSync(path.join(importsDir, safeName), '﻿' + content, 'utf8');
+      dropTmp();
       payload.source = 'cloud';
       let cloudOk = false, cloudErr = null;
       if (cloudDb.isEnabled()) {

@@ -368,8 +368,15 @@ def main():
 
     rank = build_anchor_rank(data.get('汇总', []))
     commodity = build_commodity(data.get('数据来源', []))
-    daily1 = build_daily_sheet(data.get('1日', []), '1日')
-    daily2 = build_daily_sheet(data.get('2日', []), '2日')
+
+    # 每天一张的日快照：1日 / 2日 / 3日 …（自动识别，排除「4日 (2)」这类副本）
+    daily_sheets = []
+    for name, rows in data.items():
+        if re.match(r'^\d+日$', name):
+            s = build_daily_sheet(rows, name)
+            if s and s['rows']:
+                daily_sheets.append(s)
+    daily_sheets.sort(key=lambda s: s.get('date') or '')
 
     if rank:
         s = rank['summary']
@@ -381,16 +388,13 @@ def main():
         print('商品明细 %d 行  支付GMV=%s  结算GMV=%s  类目=%d  商品=%d  卖家=%d'
               % (t['items'], money_str(t['pay']), money_str(t['settle']),
                  len(commodity['categories']), len(commodity['products']), len(commodity['sellers'])))
-    if daily1:
-        print('1日 sheet 行数=%d 日期=%s' % (len(daily1['rows']), daily1['date']))
-    if daily2:
-        print('2日 sheet 行数=%d 日期=%s' % (len(daily2['rows']), daily2['date']))
+    for s in daily_sheets:
+        print('%s sheet 行数=%d 日期=%s' % (s['name'], len(s['rows']), s['date']))
 
     bundle = {
         'anchorRank': rank,
         'commodity': commodity,
-        'daily1': daily1,
-        'daily2': daily2,
+        'dailies': daily_sheets,
         'generatedAt': None,
     }
     with open(dst, 'w', encoding='utf-8') as f:

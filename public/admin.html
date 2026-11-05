@@ -82,7 +82,7 @@
       t.textContent = msg;
       t.className = 'toast show' + (isErr ? ' err' : '');
       clearTimeout(toastTimer);
-      toastTimer = setTimeout(function () { t.className = 'toast'; }, 3200);
+      toastTimer = setTimeout(function () { t.className = 'toast'; }, isErr ? 9000 : 3200);
     }
     function fmtTime(iso) {
       if (!iso) return '-';

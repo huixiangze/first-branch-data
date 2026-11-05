@@ -242,10 +242,96 @@ function num(v) { const n = parseFloat(String(v).replace(/[,，\s%]/g, '')); ret
 // ---------------------------------------------------------------------------
 // 按模块把规范行转换为前端需要的对象
 // ---------------------------------------------------------------------------
+function moneyStr(n) {
+  n = Number(n) || 0;
+  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// 把「汇总」表按真实列名装配成前端需要的结构（含汇总指标与排名）
+// rm(rowMap) 形如 { anchor:'主播名', org:'所属公司', type:'主播类型', gmv:'下播GMV', gmvCum:'下播GMV累计', settleCum:'预估结算GMV累计', rate:'结算率' }
+function buildAnchorRankRows(rawHeaders, rawRows, rm) {
+  const idx = {};
+  (rawHeaders || []).forEach(function (h) { idx[h] = true; });
+  const get = function (row, name) {
+    if (!name || !idx[name]) return '';
+    const v = row[name];
+    return v == null ? '' : String(v).trim();
+  };
+  const dayCols = [], rateCols = [];
+  rawHeaders.forEach(function (h) {
+    let m = /(\d{1,2})日结算率$/.exec(h);
+    if (m) { rateCols.push({ h: h, d: parseInt(m[1], 10) }); return; }
+    m = /(\d{1,2})日$/.exec(h);
+    if (m) dayCols.push({ h: h, d: parseInt(m[1], 10) });
+  });
+  dayCols.sort(function (a, b) { return a.d - b.d; });
+  rateCols.sort(function (a, b) { return a.d - b.d; });
+
+  // 结算率有时是 0.394 小数、有时是 39.4 —— 统一成百分数
+  const normRate = function (v) {
+    let x = num(v);
+    if (x > 0 && x <= 1.5) x = x * 100;
+    return Math.round(x * 100) / 100;
+  };
+
+  const list = [];
+  (rawRows || []).forEach(function (r) {
+    const name = get(r, rm.anchor);
+    if (!name || name === '合计' || name === '总计' || name === '主播名') return;
+    list.push({
+      anchor: name,
+      org: get(r, rm.org),
+      type: get(r, rm.type),
+      gmv: moneyStr(num(get(r, rm.gmv))),
+      gmvCum: moneyStr(num(get(r, rm.gmvCum))),
+      settleCum: moneyStr(num(get(r, rm.settleCum))),
+      rate: normRate(get(r, rm.rate)),
+      daily: dayCols.map(function (c) { return Math.round(num(get(r, c.h)) * 100) / 100; }),
+      rateDaily: rateCols.map(function (c) { return Math.round(num(get(r, c.h)) * 100) / 100; })
+    });
+  });
+
+  list.slice().sort(function (a, b) { return num(b.gmvCum) - num(a.gmvCum); })
+    .forEach(function (r, i) { r.rank = i + 1; });
+
+  const sum = function (k) { return list.reduce(function (s, r) { return s + num(r[k]); }, 0); };
+  const r2 = function (n) { return Math.round(n * 100) / 100; };
+  const gmvToday = r2(sum('gmv')), gmvCum = r2(sum('gmvCum')), settleCum = r2(sum('settleCum'));
+  const rates = list.map(function (r) { return r.rate; }).filter(function (v) { return v > 0; });
+  const avgRate = rates.length
+    ? Math.round(rates.reduce(function (a, b) { return a + b; }, 0) / rates.length * 100) / 100 : 0;
+  const calcRate = gmvCum ? Math.round(settleCum / gmvCum * 10000) / 100 : 0;
+
+  const t = new Date();
+  return {
+    _source: 'csv',
+    source: 'csv',
+    updated: t.toISOString(),
+    asOf: t.getFullYear() + '-' + ('0' + (t.getMonth() + 1)).slice(-2) + '-' + ('0' + t.getDate()).slice(-2),
+    rows: list,
+    summary: {
+      anchors: list.length, gmvToday: gmvToday, gmvCum: gmvCum,
+      settleCum: settleCum, avgRate: avgRate, calcRate: calcRate
+    }
+  };
+}
+
 function transformModule(key, rawHeaders, rawRows, modCfg) {
   const fm = (modCfg.wps && modCfg.wps.fieldMap) || {};
   const rows = mapRows(rawHeaders, rawRows, fm);
   const out = { _source: 'wps', updated: new Date().toISOString() };
+
+  if (key === 'anchorRank') {
+    if (modCfg.rowMap) return buildAnchorRankRows(rawHeaders, rawRows, modCfg.rowMap);
+    out.rows = rows.map(function (r, i) {
+      return {
+        anchor: r.anchor || '', org: r.org || '', category: r.category || '',
+        gmv: r.gmv || '', avg: r.avg || '', target: r.target || '',
+        rate: r.rate || '', aov: r.aov || '', rank: r.rank || (i + 1)
+      };
+    });
+    return out;
+  }
 
   if (key === 'forecast') {
     out.months = rows.map(function (r) {
@@ -259,17 +345,6 @@ function transformModule(key, rawHeaders, rawRows, modCfg) {
     let est = 0, actual = 0, conf = 0, n = 0;
     out.months.forEach(function (m) { est += num(m.est); actual += num(m.actual); conf += num(m.confidence); n++; });
     out.summary = { est: n ? Math.round(est * 10) / 10 : '-', actual: n ? Math.round(actual * 10) / 10 : '-', confidence: n ? Math.round(conf / n) : '-' };
-    return out;
-  }
-
-  if (key === 'anchorRank') {
-    out.rows = rows.map(function (r, i) {
-      return {
-        anchor: r.anchor || '', org: r.org || '', category: r.category || '',
-        gmv: r.gmv || '', avg: r.avg || '', target: r.target || '',
-        rate: r.rate || '', aov: r.aov || '', rank: r.rank || (i + 1)
-      };
-    });
     return out;
   }
 
@@ -460,4 +535,4 @@ async function diagnoseModule(key, modCfg, globalCfg) {
   return { key: key, fileId: fileId, sheets: sheets.map(function (s) { return s.name; }), headers: headers, sampleRows: sampleRows };
 }
 
-module.exports = { fetchModule: fetchModule, parseCsv: parseCsv, diagnoseModule: diagnoseModule };
+module.exports = { fetchModule: fetchModule, parseCsv: parseCsv, diagnoseModule: diagnoseModule, transformModule: transformModule, buildAnchorRankRows: buildAnchorRankRows };
