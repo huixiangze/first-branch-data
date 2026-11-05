@@ -13,6 +13,11 @@
   }
   function uid() { return 'g' + Math.random().toString(36).slice(2, 9); }
 
+  // 把几何信息塞进 svg 的 data-geo，挂载后据此做十字准线（不改 DOM 结构也能算）
+  function geoJSON(o) {
+    return JSON.stringify(o).replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+  }
+
   // 数量级友好的上限：1 / 2 / 2.5 / 5 / 10 × 10^n
   function niceMax(v) {
     if (!isFinite(v) || v <= 0) return 1;
@@ -53,13 +58,15 @@
     if (!items.length) return '<div class="chart-empty">暂无数据</div>';
     var unit = opts.unit || '';
     var fmt = opts.fmt || null;
+    var W = opts.w || 680;
     var rowH = opts.rowH || 34, padTop = 10, labelW = opts.labelW || 110, valW = 78;
     var max = 0;
     items.forEach(function (it) { if (it.value > max) max = it.value; });
     if (max <= 0) max = 1;
-    var barArea = 680 - labelW - valW - 12;
+    var barArea = Math.max(80, W - labelW - valW - 12);
     var h = padTop + items.length * rowH + 10;
-    var svg = '<svg class="chart" viewBox="0 0 680 ' + h + '" preserveAspectRatio="xMidYMid meet">';
+    var svg = '<svg class="chart" viewBox="0 0 ' + W + ' ' + h + '" preserveAspectRatio="xMidYMid meet"' +
+      ' data-geo=\'' + geoJSON({ kind: 'hBars', W: W, H: h, n: items.length }) + '\'>';
     items.forEach(function (it, i) {
       var y = padTop + i * rowH;
       var w = Math.max(2, (it.value / max) * barArea);
@@ -69,7 +76,7 @@
       svg += '<rect x="' + labelW + '" y="' + (y + 6) + '" width="' + barArea + '" height="18" rx="9" fill="#eef1f5"/>';
       svg += '<rect x="' + labelW + '" y="' + (y + 6) + '" width="' + w + '" height="18" rx="9" fill="' + color + '"' +
         dtip(it.label + '：' + text) + '><title>' + esc(it.label) + '：' + esc(text) + '</title></rect>';
-      svg += '<text x="' + (680 - valW + 6) + '" y="' + (y + 20) + '" font-size="13" font-weight="700" fill="#1f2733">' + esc(text) + '</text>';
+      svg += '<text x="' + (W - valW + 6) + '" y="' + (y + 20) + '" font-size="13" font-weight="700" fill="#1f2733">' + esc(text) + '</text>';
     });
     svg += '</svg>';
     return svg;
@@ -81,14 +88,16 @@
     items = items || [];
     if (!items.length) return '<div class="chart-empty">暂无数据</div>';
     var unit = opts.unit || '';
-    var W = 680, H = opts.height || 260, base = H - 40, pad = 20;
+    var W = opts.w || 680, H = opts.height || 260, base = H - 40, pad = 20;
     var max = 0;
     items.forEach(function (it) { if (it.value > max) max = it.value; });
     if (max <= 0) max = 1;
     var n = items.length;
     var slot = (W - pad * 2) / n;
-    var bw = Math.min(46, slot * 0.6);
-    var svg = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet">';
+    // 柱子宽度跟着槽位走：大图里不会细得像根筷子，窄卡片里也不会糊成一片
+    var bw = Math.min(96, Math.max(18, slot * 0.5));
+    var svg = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet"' +
+      ' data-geo=\'' + geoJSON({ kind: 'vBars', W: W, H: H, n: n }) + '\'>';
     svg += '<line x1="' + pad + '" y1="' + base + '" x2="' + (W - pad) + '" y2="' + base + '" stroke="#e6eaf0"/>';
     items.forEach(function (it, i) {
       var h = (it.value / max) * (base - 30);
@@ -126,7 +135,7 @@
     points = points || [];
     if (points.length < 1) return '<div class="chart-empty">暂无数据</div>';
 
-    var W = 680, H = opts.height || 260;
+    var W = opts.w || 680, H = opts.height || 260;
     var L = 54, R = 18, T = 18, B = 34;
     var iw = W - L - R, ih = H - T - B;
     var vals = points.map(function (p) { return Number(p.value) || 0; });
@@ -135,11 +144,13 @@
     var color = opts.color || PALETTE[0];
     var yfmt = opts.yFmt || fmtShort;   // 数值本身已是「万」时，轴上不要再加万，否则出现 1.0万
     var gid = uid();
+    var pointFmt = opts.fmt || fmtShort;
 
     function X(i) { return L + (points.length === 1 ? iw / 2 : (i * iw) / (points.length - 1)); }
     function Y(v) { return T + ih - (v / top) * ih; }
 
-    var svg = '<svg class="chart" viewBox="0 0 680 ' + H + '" preserveAspectRatio="none" style="height:' + H + 'px">';
+    var svg = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet"' +
+      ' data-geo=\'' + geoJSON({ kind: 'line', W: W, H: H, L: L, R: R, T: T, B: B, n: points.length }) + '\'>';
     svg += '<defs><linearGradient id="' + gid + '" x1="0" y1="0" x2="0" y2="1">' +
       '<stop offset="0%" stop-color="' + color + '" stop-opacity="0.26"/>' +
       '<stop offset="100%" stop-color="' + color + '" stop-opacity="0.02"/></linearGradient></defs>';
@@ -192,10 +203,12 @@
         esc(clip(points[k].label, 6)) + '</text>';
     });
 
-    // 透明命中层：鼠标移上去立刻出浮层，不用等 <title> 的 1 秒延迟
+    // 命中层：整列热区（比小圆点好点中，也方便十字准线对齐）
+    var bandW = points.length > 1 ? Math.max(6, iw / (points.length - 1)) : iw;
     points.forEach(function (p, k) {
-      svg += '<circle cx="' + X(k) + '" cy="' + Y(vals[k]) + '" r="' + (points.length > 40 ? 4 : 9) + '" fill="transparent"' +
-        dtip(p.label + '　' + (opts.fmt ? opts.fmt(vals[k]) : fmtShort(vals[k]))) + '/>';
+      var bx = points.length > 1 ? X(k) - bandW / 2 : L;
+      svg += '<rect x="' + bx + '" y="' + T + '" width="' + bandW + '" height="' + ih + '" fill="transparent"' +
+        dtip(p.label + '　' + pointFmt(vals[k])) + '/>';
     });
 
     svg += '</svg>';
@@ -209,7 +222,7 @@
     points = (points || []).filter(function (p) { return isFinite(p.x) && isFinite(p.y); });
     if (!points.length) return '<div class="chart-empty">暂无数据</div>';
 
-    var W = 680, H = opts.height || 320;
+    var W = opts.w || 680, H = opts.height || 320;
     var L = 56, R = 22, T = 20, B = 40;
     var iw = W - L - R, ih = H - T - B;
     var xs = points.map(function (p) { return p.x; });
@@ -222,7 +235,8 @@
     function X(v) { return L + (v / xMax) * iw; }
     function Y(v) { return T + ih - (v / yMax) * ih; }
 
-    var svg = '<svg class="chart" viewBox="0 0 680 ' + H + '" preserveAspectRatio="none" style="height:' + H + 'px">';
+    var svg = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet"' +
+      ' data-geo=\'' + geoJSON({ kind: 'scatter', W: W, H: H, n: points.length }) + '\'>';
     // 网格
     for (var t = 0; t <= 4; t++) {
       var gy = T + (ih / 4) * t;
@@ -289,7 +303,7 @@
     series = (series || []).filter(function (s) { return s && s.points && s.points.length; });
     if (!series.length) return '<div class="chart-empty">暂无数据</div>';
 
-    var W = 680, H = opts.height || 260;
+    var W = opts.w || 680, H = opts.height || 260;
     var L = 54, R = 18, T = 18, B = 34;
     var iw = W - L - R, ih = H - T - B;
     var max = 0, n = 1;
@@ -303,7 +317,8 @@
     function X(i) { return L + (n === 1 ? iw / 2 : (i * iw) / (n - 1)); }
     function Y(v) { return T + ih - ((Number(v) || 0) / top) * ih; }
 
-    var svg = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="height:' + H + 'px">';
+    var svg = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet"' +
+      ' data-geo=\'' + geoJSON({ kind: 'multiLine', W: W, H: H, L: L, R: R, T: T, B: B, n: n }) + '\'>';
 
     for (var t = 0; t <= 4; t++) {
       var v = (top / 4) * t, gy = Y(v);

@@ -4,8 +4,315 @@
 (function () {
   'use strict';
 
-  var CH = window.chartHelpers;
+  var RAWCH = window.chartHelpers;
   var IN = window.Insights;
+
+  // ---------- 图表挂载层 ----------
+  // 以前图表用固定 680 宽的 viewBox + preserveAspectRatio="none" 直接拉伸，
+  // 容器一宽文字和圆点就被横向压扁。现在改成：先占位，DOM 落地后按容器实测宽度重画。
+  var SVGNS = 'http://www.w3.org/2000/svg';
+  var chartSpecs = {};
+  var chartSeq = 0;
+
+  function chartBox(kind, data, opts) {
+    var id = 'c' + (++chartSeq);
+    chartSpecs[id] = { kind: kind, data: data, opts: opts || {} };
+    return '<div class="chart-mount" data-cid="' + id + '"></div>';
+  }
+
+  var CH = {
+    line: function (d, o) { return chartBox('line', d, o); },
+    multiLine: function (d, o) { return chartBox('multiLine', d, o); },
+    scatter: function (d, o) { return chartBox('scatter', d, o); },
+    hBars: function (d, o) { return chartBox('hBars', d, o); },
+    vBars: function (d, o) { return chartBox('vBars', d, o); },
+    donutChart: function (d, o) { return chartBox('donutChart', d, o); },
+    donut: function (d, o) { return chartBox('donut', d, o); },
+    spark: RAWCH.spark,
+    fmtShort: RAWCH.fmtShort,
+    niceMax: RAWCH.niceMax,
+    PALETTE: RAWCH.PALETTE
+  };
+
+  // 按给定宽度画一张图（宽高比由 viewBox 决定，均匀缩放，不再变形）
+  function drawSpec(spec, w, big) {
+    var o = {};
+    var k;
+    for (k in spec.opts) if (Object.prototype.hasOwnProperty.call(spec.opts, k)) o[k] = spec.opts[k];
+    if (w) o.w = w;
+    if (big) {
+      if (o.height) o.height = Math.max(o.height, 340);
+      else if (spec.kind === 'line' || spec.kind === 'multiLine') o.height = 460;
+      else if (spec.kind === 'scatter') o.height = 460;
+      if (spec.kind === 'hBars') o.rowH = Math.max(38, o.rowH || 0);
+      if (spec.kind === 'donutChart') { o.size = 380; o.stroke = 44; }
+      o.showValue = spec.kind === 'line' && spec.data.length <= 12 ? true : o.showValue;
+    }
+    switch (spec.kind) {
+      case 'line': return RAWCH.line(spec.data, o);
+      case 'multiLine': return RAWCH.multiLine(spec.data, o);
+      case 'scatter': return RAWCH.scatter(spec.data, o);
+      case 'hBars': return RAWCH.hBars(spec.data, o);
+      case 'vBars': return RAWCH.vBars(spec.data, o);
+      case 'donutChart': return RAWCH.donutChart(spec.data, o);
+      case 'donut': return RAWCH.donut(spec.data, o);
+      default: return '';
+    }
+  }
+
+  function bindCrosshair(el) {
+    var svg = el.querySelector('svg.chart');
+    if (!svg || svg.getAttribute('data-cx') === '1') return;
+    var geo;
+    try { geo = JSON.parse(svg.getAttribute('data-geo') || 'null'); } catch (e) { geo = null; }
+    if (!geo || !geo.L || !geo.n) return;
+    svg.setAttribute('data-cx', '1');
+    var lo = geo.L, hi = geo.W - (geo.R || 0), n = geo.n;
+    var line = document.createElementNS(SVGNS, 'line');
+    line.setAttribute('class', 'cx-line');
+    line.setAttribute('y1', geo.T);
+    line.setAttribute('y2', geo.H - (geo.B || 0));
+    line.setAttribute('x1', lo); line.setAttribute('x2', lo);
+    line.style.display = 'none';
+    svg.appendChild(line);
+    svg.addEventListener('mousemove', function (e) {
+      var r = svg.getBoundingClientRect();
+      if (!r.width) return;
+      var x = (e.clientX - r.left) * (geo.W / r.width);
+      var i = n === 1 ? 0 : Math.round(((x - lo) / Math.max(1, hi - lo)) * (n - 1));
+      if (i < 0) i = 0;
+      if (i > n - 1) i = n - 1;
+      var px = n === 1 ? (lo + hi) / 2 : lo + (i * (hi - lo)) / (n - 1);
+      line.setAttribute('x1', px); line.setAttribute('x2', px);
+      line.style.display = '';
+    });
+    svg.addEventListener('mouseleave', function () { line.style.display = 'none'; });
+  }
+
+  function drawMount(el, spec) {
+    var w = Math.round(el.clientWidth || el.parentNode && el.parentNode.clientWidth || 680);
+    if (w < 240) w = 680;
+    el.setAttribute('data-w', String(w));
+    var html = drawSpec(spec, w, false);
+    if (!html) return;
+    el.innerHTML = html;
+    el.setAttribute('data-mounted', '1');
+    bindCrosshair(el);
+    if (!el.querySelector('.chart-zoom')) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chart-zoom';
+      btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 15v5h-5M15 4h5v5M9 20H4v-5"/></svg><span>放大</span>';
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        openChartModal(el.getAttribute('data-cid'));
+      });
+      el.appendChild(btn);
+    }
+  }
+
+  function mountCharts(root) {
+    var list = (root || document).querySelectorAll('.chart-mount[data-cid]');
+    for (var i = 0; i < list.length; i++) {
+      var el = list[i];
+      var id = el.getAttribute('data-cid');
+      var spec = chartSpecs[id];
+      if (!spec) continue;
+      if (el.getAttribute('data-mounted') === '1') continue;
+      drawMount(el, spec);
+    }
+    // 清掉已经不在页面上的图表定义，长时间挂着也不会越攒越多
+    var live = {};
+    for (var j = 0; j < list.length; j++) live[list[j].getAttribute('data-cid')] = 1;
+    if (cmState.cid) live[cmState.cid] = 1;
+    for (var key in chartSpecs) {
+      if (Object.prototype.hasOwnProperty.call(chartSpecs, key) && !live[key]) delete chartSpecs[key];
+    }
+  }
+
+  var chartResizeTimer = null;
+  function relayoutCharts() {
+    var list = document.querySelectorAll('.chart-mount[data-mounted="1"]');
+    for (var i = 0; i < list.length; i++) {
+      var el = list[i];
+      var spec = chartSpecs[el.getAttribute('data-cid')];
+      if (!spec) continue;
+      var w = Math.round(el.clientWidth || 0);
+      if (!w) continue;
+      if (Math.abs(w - Number(el.getAttribute('data-w') || 0)) < 10) continue;
+      el.removeAttribute('data-mounted');
+      el.querySelectorAll('.chart-zoom').forEach(function (b) { b.remove(); });
+      drawMount(el, spec);
+    }
+  }
+
+  // ---------- 大图弹窗 ----------
+  var cmState = { cid: null, hidden: {}, mode: 'chart' };
+
+  function openChartModal(cid) {
+    var spec = chartSpecs[cid];
+    var mask = $('chartMask');
+    if (!spec || !mask) return;
+    cmState.cid = cid;
+    cmState.hidden = {};
+    cmState.mode = 'chart';
+    var host = document.querySelector('.chart-mount[data-cid="' + cid + '"]');
+    var panel = host ? (host.closest('.chart-panel') || host.closest('.panel')) : null;
+    var title = panel ? panel.querySelector('.ph-title') : null;
+    var main = title ? (title.childNodes[0] && title.childNodes[0].textContent || '') : '图表';
+    var subEl = title ? title.querySelector('.ph-sub') : null;
+    $('cmTitle').textContent = String(main).trim() || '图表';
+    $('cmSub').textContent = subEl ? subEl.textContent.trim() : '';
+    $('cmToggle').textContent = '数据表';
+    mask.classList.add('show');
+    document.body.classList.add('cm-open');
+    renderChartModal();
+  }
+
+  function closeChartModal() {
+    var mask = $('chartMask');
+    if (mask) mask.classList.remove('show');
+    document.body.classList.remove('cm-open');
+    cmState.cid = null;
+  }
+
+  function seriesVisible(spec, i) {
+    return !cmState.hidden[i];
+  }
+
+  function modalSpec() {
+    var spec = chartSpecs[cmState.cid];
+    if (!spec) return null;
+    if (spec.kind !== 'multiLine') return spec;
+    var series = spec.data.filter(function (s, i) { return seriesVisible(spec, i); });
+    var copy = { kind: spec.kind, opts: spec.opts };
+    copy.data = series.length ? series : [spec.data[0]];
+    return copy;
+  }
+
+  function renderChartModal() {
+    var spec = cmState.cid ? chartSpecs[cmState.cid] : null;
+    var body = $('cmBody'), legendEl = $('cmLegend');
+    if (!spec || !body) return;
+
+    // 图例（多系列可点击切换）
+    var lg = '';
+    if (spec.kind === 'multiLine') {
+      lg = spec.data.map(function (s, i) {
+        var color = s.color || RAWCH.PALETTE[i % RAWCH.PALETTE.length];
+        return '<button type="button" class="lg-chip' + (seriesVisible(spec, i) ? '' : ' off') +
+          '" data-lg="' + i + '"><i style="background:' + color + '"></i>' + esc(s.name) + '</button>';
+      }).join('');
+    } else if (spec.kind === 'donutChart') {
+      // 环形图没有坐标轴，颜色必须配图例才看得懂
+      var tot = spec.data.reduce(function (a, b) { return a + b.value; }, 0) || 1;
+      lg = spec.data.map(function (s, i) {
+        var color = s.color || RAWCH.PALETTE[i % RAWCH.PALETTE.length];
+        return '<span class="lg-chip static"><i style="background:' + color + '"></i>' + esc(s.label) +
+          '<b>' + (s.value / tot * 100).toFixed(1) + '%</b></span>';
+      }).join('');
+    }
+    legendEl.innerHTML = lg;
+    legendEl.style.display = lg ? '' : 'none';
+
+    if (cmState.mode === 'table') {
+      body.innerHTML = specTableHTML(spec);
+      return;
+    }
+
+    var w = Math.max(560, Math.min(1360, body.clientWidth || 1000));
+    var view = modalSpec();
+    body.innerHTML = '<div class="cm-chart" data-cw="' + w + '">' + drawSpec(view, w, true) + '</div>';
+    var svgHost = body.querySelector('.cm-chart');
+    if (svgHost) bindCrosshair(svgHost);
+  }
+
+  function specTableHTML(spec) {
+    var rows = [], head = [];
+    var fmt = spec.opts && spec.opts.fmt;
+    function f(v) { return fmt ? fmt(v) : RAWCH.fmtShort(v); }
+    if (spec.kind === 'multiLine') {
+      var names = spec.data.map(function (s) { return s.name; });
+      head = ['日期'].concat(names);
+      var len = 0;
+      spec.data.forEach(function (s) { if (s.points.length > len) len = s.points.length; });
+      for (var i = 0; i < len; i++) {
+        var r = [spec.data[0].points[i] ? spec.data[0].points[i].label : ('第 ' + (i + 1) + ' 项')];
+        spec.data.forEach(function (s) { r.push(s.points[i] ? f(s.points[i].value) : '—'); });
+        rows.push(r);
+      }
+    } else if (spec.kind === 'line') {
+      head = ['日期', '数值'];
+      spec.data.forEach(function (p) { rows.push([p.label, f(p.value)]); });
+    } else if (spec.kind === 'scatter') {
+      head = ['名称', (spec.opts.xLabel || 'X'), (spec.opts.yLabel || 'Y')];
+      spec.data.forEach(function (p) { rows.push([p.label, RAWCH.fmtShort(p.x), p.y]); });
+    } else if (spec.kind === 'hBars' || spec.kind === 'vBars') {
+      head = ['名称', '数值'];
+      spec.data.forEach(function (p) { rows.push([p.label, p.value + (spec.opts.unit || '')]); });
+    } else if (spec.kind === 'donutChart') {
+      head = ['名称', '数值', '占比'];
+      var total = spec.data.reduce(function (a, b) { return a + b.value; }, 0) || 1;
+      spec.data.forEach(function (p) { rows.push([p.label, RAWCH.fmtShort(p.value), (p.value / total * 100).toFixed(1) + '%']); });
+    } else {
+      return '<div class="empty">这类图表暂不支持表格视图</div>';
+    }
+    var html = '<div class="cm-table-wrap"><table class="tbl compact"><thead><tr>' +
+      head.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') + '</tr></thead><tbody>' +
+      rows.map(function (r) {
+        return '<tr>' + r.map(function (c, i) { return '<td' + (i ? ' class="mono"' : '') + '>' + esc(c) + '</td>'; }).join('') + '</tr>';
+      }).join('') + '</tbody></table></div>';
+    return html;
+  }
+
+  function bindChartModal() {
+    var mask = $('chartMask');
+    if (!mask) return;
+    $('cmClose').onclick = closeChartModal;
+    mask.onclick = function (e) { if (e.target === mask) closeChartModal(); };
+    $('cmToggle').onclick = function () {
+      cmState.mode = cmState.mode === 'chart' ? 'table' : 'chart';
+      $('cmToggle').textContent = cmState.mode === 'chart' ? '数据表' : '看图表';
+      renderChartModal();
+    };
+    $('cmLegend').onclick = function (e) {
+      var chip = e.target.closest('[data-lg]');
+      if (!chip) return;
+      var i = chip.getAttribute('data-lg');
+      if (cmState.hidden[i]) delete cmState.hidden[i];
+      else cmState.hidden[i] = true;
+      renderChartModal();
+    };
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && mask.classList.contains('show')) closeChartModal();
+    });
+    if (window.ResizeObserver) {
+      new ResizeObserver(function () {
+        if (mask.classList.contains('show') && cmState.mode === 'chart') {
+          clearTimeout(bindChartModal._t);
+          bindChartModal._t = setTimeout(renderChartModal, 120);
+        }
+      }).observe($('cmBody'));
+    }
+  }
+
+  // 监听 DOM 变化：任何视图重绘后自动把占位 div 画成图
+  function observeCharts() {
+    if (!window.MutationObserver) { mountCharts(document); return; }
+    var pending = false;
+    var mo = new MutationObserver(function () {
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(function () { pending = false; mountCharts(document); });
+    });
+    mo.observe(document.body, { childList: true, subtree: true });
+    var rt = null;
+    window.addEventListener('resize', function () {
+      clearTimeout(rt);
+      rt = setTimeout(relayoutCharts, 180);
+    });
+    mountCharts(document);
+  }
 
   // ---------- 图标 ----------
   var ICONS = {
@@ -244,7 +551,7 @@
     opts = opts || {};
     return '<div class="panel chart-panel"><div class="panel-head"><div class="ph-title">' + esc(title) +
       (sub ? ' <span class="ph-sub">' + esc(sub) + '</span>' : '') + '</div>' +
-      '<div class="ph-tools"><button class="tbtn sm" data-role="img">导出图片</button></div></div>' +
+      '<div class="ph-tools"><span class="ph-hint">点图表可放大</span><button class="tbtn sm" data-role="img">导出图片</button></div></div>' +
       (opts.legend || '') + svg + '</div>';
   }
 
@@ -434,7 +741,7 @@
 
     html += '<div class="grid-2">';
     html += '<div class="panel chart-panel"><div class="panel-head"><div class="ph-title">每日 GMV 走势 <span class="ph-sub">全员合计 · 万元</span></div>' +
-      '<div class="ph-tools"><button class="tbtn sm" data-role="img">导出图片</button></div></div>' +
+      '<div class="ph-tools"><span class="ph-hint">点图表可放大</span><button class="tbtn sm" data-role="img">导出图片</button></div></div>' +
       '<div class="legend"><span><i style="background:#2f6fed"></i>日 GMV</span><span>峰值 ' + wan(Math.max.apply(null, sparkVals)) + ' 万</span><span>均值 ' +
       wan(sparkVals.reduce(function (a, b) { return a + b; }, 0) / (sparkVals.length || 1)) + ' 万</span></div>' + trendSvg + '</div>';
 
@@ -671,7 +978,7 @@
     if (series.length >= 2) {
       html += '<div class="panel chart-panel"><div class="panel-head"><div class="ph-title">' +
         esc(meta.name) + ' <span class="ph-sub">' + esc(r.anchor) + '</span></div>' +
-        '<div class="ph-tools"><button class="tbtn sm" data-role="img">导出图片</button></div></div>' +
+        '<div class="ph-tools"><span class="ph-hint">点图表可放大</span><button class="tbtn sm" data-role="img">导出图片</button></div></div>' +
         CH.line(series.map(function (x) { return { label: x.label, value: meta.conv(x) }; }), {
           color: meta.color, height: 250, fmt: meta.fmt, yFmt: mk === 'rate' ? plainNum : plainNum, showValue: series.length <= 8
         }) + '</div>';
@@ -1086,7 +1393,7 @@
     var pts = scope.filter(function (r) { return r.est > 0 || r.actual > 0; });
     if (pts.length) {
       html += '<div class="panel chart-panel"><div class="panel-head"><div class="ph-title">每日预估 vs 实际 <span class="ph-sub">万元</span></div>' +
-        '<div class="ph-tools"><button class="tbtn sm" data-role="img">导出图片</button></div></div>' +
+        '<div class="ph-tools"><span class="ph-hint">点图表可放大</span><button class="tbtn sm" data-role="img">导出图片</button></div></div>' +
         '<div class="legend"><span><i style="background:#2f6fed"></i>实际</span><span><i style="background:#b9c6e8"></i>预估</span></div>' +
         CH.multiLine([
           { name: '预估', color: '#b9c6e8', dashed: true, points: pts.map(function (r) { return { label: r.date.slice(5), value: Math.round(r.est * 10) / 10 }; }) },
@@ -1462,6 +1769,13 @@
     // 委托到 document：抽屉里的表格在 #content 之外，也要能响应排序/搜索/分页
     document.addEventListener('click', function (e) {
       var t = e.target;
+
+      // 点图表任意位置 → 打开大图（放大按钮走自己的 handler，已 stopPropagation）
+      var cm = t.closest ? t.closest('.chart-mount[data-mounted="1"]') : null;
+      if (cm && !(t.closest && t.closest('button'))) {
+        openChartModal(cm.getAttribute('data-cid'));
+        return;
+      }
 
       // 打开主播完整分析页（表格里的主播名 / 抽屉里的入口按钮）
       var pf = t.closest ? t.closest('[data-profile]') : null;
@@ -1877,6 +2191,8 @@
     attachHandlers();
     bindCmd();
     bindChartTip();
+    bindChartModal();
+    observeCharts();
     setInterval(tickClock, 30000); tickClock();
     setInterval(renderSyncChip, 20000);   // 相对时间（几分钟前）跟着走
     setInterval(fetchSync, 60000);        // 本机同步助手在后台拉完后，胶囊能自己跟上
