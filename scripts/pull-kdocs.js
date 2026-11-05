@@ -179,6 +179,31 @@ function archiveFile(file) {  try {
   } catch (e) { log('  归档失败（不影响数据）：' + e.message); return false; }
 }
 
+/**
+ * 直连下载：复用 WPS 客户端已登录的 kdocs 会话（见 kdocs_fetch.py）。
+ * 比浏览器兜底稳定得多 —— 不依赖浏览器登录态、不依赖下载目录监视。
+ */
+function fetchByApi(link) {
+  const py = process.env.PYTHON || 'python';
+  const args = [path.join(__dirname, 'kdocs_fetch.py'), '--out', INBOX, '--json'];
+  if (link.sid) args.push('--sid', link.sid);
+  else if (link.fileid) args.push('--fileid', link.fileid);
+  else return { ok: false, error: '链接既无 sid 也无 fileid' };
+
+  const r = spawnSync(py, args, {
+    cwd: path.resolve(__dirname, '..'),
+    encoding: 'utf8',
+    timeout: 30 * 60 * 1000
+  });
+  const lines = String(r.stdout || '').trim().split('\n').filter((l) => l.trim());
+  const last = lines.length ? lines[lines.length - 1] : '';
+  try {
+    return JSON.parse(last);
+  } catch (e) {
+    return { ok: false, error: '拉取器输出无法解析：' + (last || String(r.stderr || '').slice(-200)) };
+  }
+}
+
 function candidateUrls(link) {
   const out = [];
   if (link.url) out.push(link.url);
@@ -230,31 +255,44 @@ async function handleLink(cfg, state, link, opts) {
     return false;
   }
 
-  // 2) 用浏览器会话下载（多候选地址，优先用上次成功过的那个）
-  let cands = candidateUrls(link);
-  if (!cands.length) { log('  ❌ 没有可用的下载地址（缺 fileid/url）'); return false; }
-  if (prev && prev.goodUrl) {
-    cands = [prev.goodUrl].concat(cands.filter((u) => u !== prev.goodUrl));
-  }
-  log('  检测到更新，准备下载（最多尝试 ' + cands.length + ' 个地址）');
-
+  // 2) 直连下载（复用 WPS 客户端登录态），失败才退回浏览器
   let got = null;
   let usedUrl = null;
-  for (const u of cands) {
-    log('  → 打开：' + u);
-    const before = snapshot(cfg.watchDirs);
-    openInBrowser(u);
-    const wait = Math.min(cfg.pull.waitSeconds, 90);
-    log('    等待文件落地（最多 ' + wait + ' 秒）…');
-    got = await waitForDownload(cfg.watchDirs, before, wait);
-    if (got) { usedUrl = u; break; }
-    log('    · 这个地址没有触发下载，换下一个');
+
+  log('  检测到更新，尝试直连下载');
+  const api = fetchByApi(link);
+  if (api.ok) {
+    got = { full: api.path, size: api.bytes };
+    usedUrl = 'kdocs-api';
+  } else if (api.code === 'forbidProtectedFile') {
+    log('  ❌ 该文件被所有者设为「禁止下载」，程序无法获取');
+    log('     解决：请文件所有者在 WPS 里关闭"禁止下载/另存"，或把文件放进共享文件夹。');
+    markFail(state, id, 'forbidden');
+    return false;
+  } else {
+    log('  ⚠️ 直连下载失败：' + (api.error || '未知原因'));
+    log('     退回浏览器方式（需 Edge 里已登录金山文档）');
+    let cands = candidateUrls(link);
+    if (prev && prev.goodUrl) {
+      cands = [prev.goodUrl].concat(cands.filter((u) => u !== prev.goodUrl));
+    }
+    for (const u of cands) {
+      log('  → 打开：' + u);
+      const before = snapshot(cfg.watchDirs);
+      openInBrowser(u);
+      const wait = Math.min(cfg.pull.waitSeconds, 90);
+      log('    等待文件落地（最多 ' + wait + ' 秒）…');
+      got = await waitForDownload(cfg.watchDirs, before, wait);
+      if (got) { usedUrl = u; break; }
+      log('    · 这个地址没有触发下载，换下一个');
+    }
   }
+
   if (!got) {
-    log('  ❌ 所有下载地址都没能触发下载。排查顺序：');
-    log('     1) Edge 里金山文档是否仍登录（在该浏览器打开一次表格确认）；');
-    log('     2) Edge 设置→下载 是否开着"每次下载都询问保存位置"（需关闭）；');
-    log('     3) 该下载地址在你账号下是否被禁止下载（元数据 user_acl.download）。');
+    log('  ❌ 两种下载方式都失败了。排查顺序：');
+    log('     1) WPS 客户端是否仍登录同一账号（打开一次表格确认）；');
+    log('     2) Edge 里金山文档是否登录、下载是否被"每次询问保存位置"挡住；');
+    log('     3) 该文件是否被所有者设为禁止下载。');
     markFail(state, id, 'no-download');
     return false;
   }

@@ -100,6 +100,23 @@ async function main() {
       perf.sheets.map(function (s) { return s.name; }).join('/') + '）');
   }
 
+  // 其他模块（forecast / rongpin 等）：导入脚本写进 bundle 后原样 upsert，
+  // 以后新增数据源不用再改这个文件。
+  const HANDLED = {
+    anchorRank: 1, commodity: 1, home: 1, anchorPerformance: 1,
+    dailies: 1, daily1: 1, daily2: 1, generatedAt: 1
+  };
+  for (const key of Object.keys(b)) {
+    if (HANDLED[key]) continue;
+    const payload = b[key];
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) continue;
+    payload.source = 'cloud';
+    payload.refreshedAt = now;
+    await cloudDb.upsertModule(key, payload);
+    const n = (payload.rows || payload.months || []).length;
+    console.log('[ok] ' + key + '  ' + n + ' 条');
+  }
+
   console.log('全部完成，时间 ' + now);
 }
 

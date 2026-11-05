@@ -489,17 +489,60 @@ async function importWorkbook(file) {
   const bundle = path.join(ROOT_DIR, 'data', 'imports', 'bundle.json');
   const out1 = await runCmd(py, [path.join(ROOT_DIR, 'scripts', 'import_workbook.py'), file, bundle]);
   String(out1).trim().split('\n').forEach(function (l) { if (l.trim()) log('  ' + l.trim()); });
+
+  // 内容指纹：WPS 每次打开文档都会刷新镜像文件的 mtime，
+  // 但数据可能完全没变。这里比对解析结果，一致就不重复写云库。
+  const fpFile = path.join(ROOT_DIR, 'data', 'imports', '.fingerprint.json');
+  let fp = '';
+  try {
+    const b = JSON.parse(fs.readFileSync(bundle, 'utf8'));
+    const r = b.anchorRank || {};
+    const sig = JSON.stringify([
+      r.asOf, (r.rows || []).length, (r.rawHeaders || []).length,
+      (r.rawRows || []).length, r.summary || null,
+      ((b.commodity || {}).total) || null,
+      ((b.daily || []).length)
+    ]);
+    fp = require('crypto').createHash('sha1').update(sig).digest('hex');
+  } catch (e) { fp = ''; }
+
+  if (fp) {
+    let prev = '';
+    try { prev = JSON.parse(fs.readFileSync(fpFile, 'utf8')).fp || ''; } catch (e) { }
+    if (prev === fp) {
+      log('  数据内容与上次导入一致（指纹 ' + fp.slice(0, 8) + '），跳过上传');
+      return { rows: 'workbook', cols: 67 };
+    }
+  }
+
   const out2 = await runCmd(process.execPath, [path.join(ROOT_DIR, 'scripts', 'push_bundle.js'), bundle]);
   String(out2).trim().split('\n').forEach(function (l) { if (l.trim()) log('  ' + l.trim()); });
+
+  if (fp) {
+    try {
+      fs.writeFileSync(fpFile, JSON.stringify({
+        fp: fp, at: new Date().toISOString(), file: path.basename(file)
+      }, null, 2), 'utf8');
+    } catch (e) { /* 指纹写失败不影响导入 */ }
+  }
   return { rows: 'workbook', cols: 67 };
 }
 
 async function processFile(cfg, cookie, file, module, opts) {
   const stat = fs.statSync(file);
   const ext = path.extname(file).toLowerCase();
-  log('发现待同步文件：' + path.basename(file) + '（' + (stat.size / 1024).toFixed(0) + 'KB，模块=' + module + '）');
+  const mb = stat.size / 1048576;
+  log('发现待同步文件：' + path.basename(file) + '（' + mb.toFixed(1) + 'MB，模块=' + module + '）');
 
-  if (ext !== '.csv' && WORKBOOK_MODULES[module]) {
+  // 体积护栏：业绩预估表这类 1GB 级工作簿不能整读进内存，否则助手会被撑爆。
+  const isWorkbook = ext !== '.csv' && WORKBOOK_MODULES[module];
+  const limitMB = isWorkbook ? 400 : 40;
+  if (mb > limitMB) {
+    throw new Error('文件 ' + mb.toFixed(0) + 'MB，超过该模块上限 ' + limitMB +
+      'MB。请在金山文档里只导出需要的 sheet/区间为 CSV，或先拆分工作簿。');
+  }
+
+  if (isWorkbook) {
     log('  整本工作簿导入：汇总 / 数据来源 / 1日 / 2日 全部解析');
     if (opts.dry) {
       log('  [演练] 将执行 import_workbook.py → push_bundle.js（主播榜单·商品结构·首页·主播业绩）');
@@ -583,6 +626,19 @@ async function scanOnce(cfg, state, opts) {
     try { st = fs.statSync(f); } catch (e) { continue; }
     const rec = state.seen[f];
     if (rec && rec.size === st.size && rec.mtimeMs === st.mtimeMs) continue;
+
+    // WPS / 浏览器刚落盘的文件可能还在写，等它稳定再读，避免解析到半个文件。
+    // 常驻模式：本轮跳过，下一轮（15 秒后）自然接上；--once 模式：就地等。
+    const age = Date.now() - st.mtimeMs;
+    if (age < 3000) {
+      if (!opts.once) {
+        log('  ' + path.basename(f) + ' 刚写入 ' + Math.round(age / 1000) + ' 秒，等它写完再看');
+        continue;
+      }
+      await new Promise(function (r) { setTimeout(r, 3000 - age + 200); });
+      try { st = fs.statSync(f); } catch (e) { continue; }
+    }
+
     pending.push({ file: f, module, size: st.size, mtimeMs: st.mtimeMs });
   }
   if (!pending.length) return 0;
@@ -600,8 +656,14 @@ async function scanOnce(cfg, state, opts) {
   let okCount = 0;
   for (const p of pending) {
     try {
-      if (!cookie) cookie = await login(cfg);
+      // 整本工作簿分支直接写云数据库，不需要登录旧站点；
+      // 其余模块走 /api/upload-csv 才需要会话 cookie。
+      if (!cookie && !WORKBOOK_MODULES[p.module]) cookie = await login(cfg);
       await processFile(cfg, cookie, p.file, p.module, opts);
+      if (opts.dry) {
+        log('  [演练] ' + path.basename(p.file) + ' 未写库，也不记为已同步');
+        continue;
+      }
       state.seen[p.file] = { size: p.size, mtimeMs: p.mtimeMs, module: p.module, ok: true, at: new Date().toISOString() };
       saveState(state);
       okCount++;
@@ -653,7 +715,8 @@ async function main() {
     if (!fs.existsSync(file)) throw new Error('文件不存在：' + file);
     const module = (mi >= 0 && argv[mi + 1]) ? argv[mi + 1] : matchModule(cfg, path.basename(file));
     if (!module) throw new Error('无法从文件名判断模块，请用 --module 指定（可填 forecast / anchorRank / anchorPerformance / rongpin）');
-    const cookie = opts.dry ? null : await login(cfg);
+    // 整本工作簿分支直连云数据库，不需要旧站点会话；其余模块才登录。
+    const cookie = (opts.dry || WORKBOOK_MODULES[module]) ? null : await login(cfg);
     await processFile(cfg, cookie, file, module, opts);
     log('=== 完成 ===');
     return;
