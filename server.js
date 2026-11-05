@@ -185,17 +185,27 @@ async function buildSyncReport() {
     .filter(function (t) { return t > 0; });
   const latest = seen.length ? new Date(Math.max.apply(null, seen)).toISOString() : null;
 
+  // 本机同步助手上报的「检查心跳」：它每次拉取完都会写一条，即使内容没变。
+  // 云端容器读不到本机的 pull-state.json，所以要靠这条记录才知道"刚才有没有拉过"。
+  let hb = null;
+  if (cloudDb.isEnabled()) {
+    try { hb = await cloudDb.getModule('__sync'); } catch (e) { hb = null; }
+  }
+
   const pull = readPullState();
-  // 「上次拉取」优先用同步助手的实际拉取时间；拿不到就退化成云库最后写入时间
-  const candidates = [latest, pull && pull.at ? pull.at : null]
+  // 「上次检查」优先用心跳；没有心跳再退到本机 pull-state / 云库最后写入时间
+  const checkAt = (hb && hb.at) ? hb.at : (pull && pull.at ? pull.at : null);
+  const candidates = [latest, checkAt]
     .map(function (x) { return x ? new Date(x).getTime() : 0; })
     .filter(function (t) { return t > 0; });
 
   return {
     ok: true,
     now: new Date().toISOString(),
+    lastCheckAt: checkAt,
     lastPullAt: candidates.length ? new Date(Math.max.apply(null, candidates)).toISOString() : null,
     latestWriteAt: latest,
+    check: hb,
     pull: pull,
     modules: mods,
     cloudEnabled: cloudDb.isEnabled(),

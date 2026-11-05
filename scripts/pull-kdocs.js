@@ -165,8 +165,12 @@ async function waitForDownload(dirs, before, timeoutSec) {
 function runSyncAgent(file, module) {
   const args = [path.join(__dirname, 'sync-agent.js'), '--file', file];
   if (module) args.push('--module', module);
-  const r = spawnSync(process.execPath, args, { stdio: 'inherit' });
-  return r.status === 0;
+  // 捕获输出：既要在控制台看到，也要据此判断到底是"写进了云库"还是"内容没变跳过了"
+  const r = spawnSync(process.execPath, args, { encoding: 'utf8' });
+  const out = String(r.stdout || '') + String(r.stderr || '');
+  out.trim().split(/\r?\n/).forEach((l) => { if (l.trim()) console.log(l); });
+  const skipped = /跳过上传|与上次导入一致/.test(out);
+  return { ok: r.status === 0, skipped: skipped };
 }
 
 function archiveFile(file) {  try {
@@ -234,7 +238,10 @@ function candidateUrls(link) {
 
 async function handleLink(cfg, state, link, opts) {
   const name = link.label || link.module || link.sid;
-  if (!link.sid && !link.fileid) { log('⚠️ 链接缺少 sid/fileid，跳过：' + name); return false; }
+  const rec = (status, detail) => ({ label: name, status: status, detail: detail || '', at: new Date().toISOString() });
+  const id = link.sid || link.fileid;
+
+  if (!link.sid && !link.fileid) { log('⚠️ 链接缺少 sid/fileid，跳过：' + name); return rec('failed', '链接缺少 sid/fileid'); }
 
   // 1) 先查元数据（匿名、极轻量）
   let meta = null;
@@ -243,33 +250,43 @@ async function handleLink(cfg, state, link, opts) {
       meta = await fetchMeta(link.sid);
     } catch (e) {
       log('⚠️ ' + name + ' 元数据查询失败：' + e.message);
-      if (!opts.force) return false;
+      if (!opts.force) return rec('failed', '元数据查询失败：' + e.message);
     }
   }
 
   let key = (meta && meta.fsha) ? ('v' + meta.fver + ':' + meta.mtime + ':' + meta.fsha) : null;
   if (meta) {
     log('· ' + name + ' ｜' + meta.fname + ' ｜' + (meta.fsize / 1048576).toFixed(1) + 'MB ｜最后修改 ' + fmtTime(meta.mtime));
-    if (opts.check) return true;
+    // 记住真实文件名，面板里才不用显示一串 sid
+    if (meta.fname) {
+      const cur = (state.links && state.links[id]) || {};
+      if (cur.name !== meta.fname) { cur.name = meta.fname; state.links[id] = cur; saveState(state); }
+    }
+    if (opts.check) return rec('unchanged', '仅检查元数据，未下载');
   }
 
-  const id = link.sid || link.fileid;
   const prev = (state.links && state.links[id]) || null;
   if (!opts.force && prev && prev.fail >= 3) {
     log('  ⏸ 该链接已暂停（连续失败 ' + prev.fail + ' 次：' + (prev.lastError || '') + '）');
     log('     修好后运行 测试拉取.bat 即可恢复。');
-    return false;
+    // 名字也存下来，否则面板里只能显示一串 sid，看不出是哪个文件
+    if (!prev.name) {
+      prev.name = (meta && meta.fname) || name;
+      state.links[id] = prev;
+      saveState(state);
+    }
+    return rec('paused', '已暂停：连续失败 ' + prev.fail + ' 次（' + (prev.lastError || '未知原因') + '）');
   }
   if (!opts.force && key && prev && prev.key === key) {
     log('  内容无变化，跳过下载');
-    return true;
+    return rec('unchanged', '源文档未修改，跳过下载');
   }
   if (meta && meta.fsize / 1048576 > cfg.pull.sizeLimitMB) {
     log('  ❌ 文件 ' + (meta.fsize / 1048576).toFixed(0) + 'MB 超过上限 ' + cfg.pull.sizeLimitMB + 'MB');
     log('     建议在金山文档里改用「导出为 CSV」（只导出需要的那个工作表），体积会小很多。');
     if (key) { state.links[id] = { key, skipped: 'too-large', at: new Date().toISOString() }; saveState(state); }
     markFail(state, id, 'too-large');
-    return false;
+    return rec('failed', '文件超过体积上限 ' + cfg.pull.sizeLimitMB + 'MB');
   }
 
   // 2) 直连下载（复用 WPS 客户端登录态），失败才退回浏览器
@@ -285,7 +302,7 @@ async function handleLink(cfg, state, link, opts) {
     log('  ❌ 该文件被所有者设为「禁止下载」，程序无法获取');
     log('     解决：请文件所有者在 WPS 里关闭"禁止下载/另存"，或把文件放进共享文件夹。');
     markFail(state, id, 'forbidden');
-    return false;
+    return rec('failed', '文件被所有者设为「禁止下载」（forbidden）');
   } else {
     log('  ⚠️ 直连下载失败：' + (api.error || '未知原因'));
     log('     退回浏览器方式（需 Edge 里已登录金山文档）');
@@ -309,29 +326,35 @@ async function handleLink(cfg, state, link, opts) {
     log('  ❌ 两种下载方式都失败了。排查顺序：');
     log('     1) WPS 客户端是否仍登录同一账号（打开一次表格确认）；');
     log('     2) Edge 里金山文档是否登录、下载是否被"每次询问保存位置"挡住；');
-    log('     3) 该文件是否被所有者设为禁止下载。');
+      log('     3) 该文件是否被所有者设为禁止下载。');
     markFail(state, id, 'no-download');
-    return false;
+    return rec('failed', '下载失败：直连与浏览器两种方式都没拿到文件');
   }
   const mb = got.size / 1048576;
   log('  ✅ 已下载：' + path.basename(got.full) + '（' + mb.toFixed(1) + 'MB）');
   if (mb > cfg.pull.sizeLimitMB) {
     log('  ❌ 超过体积上限，未上传，文件保留在下载目录');
     markFail(state, id, 'too-large-after-download');
-    return false;
+    return rec('failed', '下载后体积超过上限，未上传');
   }
 
   // 3) 交给同步助手解析并写云库
-  const ok = runSyncAgent(got.full, link.module);
-  if (ok) {
+  const res = runSyncAgent(got.full, link.module);
+  if (res.ok) {
     archiveFile(got.full);
     if (key) { state.links[id] = { key, at: new Date().toISOString(), name: meta ? meta.fname : path.basename(got.full), goodUrl: usedUrl }; saveState(state); }
     else { state.links[id] = { at: new Date().toISOString(), goodUrl: usedUrl }; saveState(state); }
+    if (res.skipped) {
+      // 关键：文件拉下来了，但解析结果和上次一模一样，所以没有写云库。
+      // 这不是失败，但也绝不能报「已更新到云端」——否则页面时间不动，用户会以为没跑。
+      log('  ✔ 已下载并解析：' + name + ' 内容与上次一致（指纹未变），未写入云库');
+      return rec('unchanged', '已下载，但内容与上次完全一致，未覆盖云库');
+    }
     log('  ✔ 完成：' + name + ' 已更新到云端，页面 60 秒内自动刷新');
-  } else {
-    markFail(state, id, 'sync-failed');
+    return rec('written', '已写入云库');
   }
-  return ok;
+  markFail(state, id, 'sync-failed');
+  return rec('failed', '解析或上传失败，详见 sync.log');
 }
 
 async function main() {
@@ -358,14 +381,38 @@ async function main() {
   if (!state.links) state.links = {};
   log('=== 拉取开始（' + links.length + ' 个链接' + (opts.check ? '，仅检查元数据' : '') + '）===');
 
+  const results = [];
   let okCount = 0;
   for (const l of links) {
-    try { if (await handleLink(cfg, state, l, opts)) okCount++; }
-    catch (e) { log('  ❌ 处理异常：' + e.message); }
+    try {
+      const r = await handleLink(cfg, state, l, opts);
+      results.push(r);
+      if (r.status === 'written' || r.status === 'unchanged') okCount++;
+    } catch (e) {
+      log('  ❌ 处理异常：' + e.message);
+      results.push({ label: l.label || l.module || l.sid, status: 'failed', detail: '异常：' + e.message, at: new Date().toISOString() });
+    }
   }
-  saveState(state);
+
+  // 注意顺序：lastRunAt 必须写在 saveState 之前，否则永远不会落盘
   state.lastRunAt = new Date().toISOString();
+  saveState(state);
   log('=== 结束：成功 ' + okCount + '/' + links.length + ' ===');
+
+  // 把本次检查的结果报到云端，页面才能显示"最近一次检查"以及"为什么没更新"
+  if (!opts.check) {
+    try {
+      const hb = require('./sync-heartbeat');
+      const r = await hb.report({
+        status: hb.summarize(results),
+        results: results,
+        trigger: opts.force ? 'manual' : 'schedule'
+      });
+      if (!r.ok) log('（心跳未上报：' + r.reason + '）');
+    } catch (e) {
+      log('（心跳上报异常：' + e.message + '）');
+    }
+  }
 }
 
 main().catch((e) => { log('启动失败：' + e.message); process.exitCode = 1; });

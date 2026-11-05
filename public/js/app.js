@@ -1300,22 +1300,41 @@
     toast._t = setTimeout(function () { el.className = 'toast'; }, 2600);
   }
 
+  // 一次检查的结论。历史数据没有心跳字段时退化成"只有云库写入时间"。
+  var CHECK_STATUS = {
+    written: { cls: 'fresh', txt: '已更新数据' },
+    unchanged: { cls: 'same', txt: '内容无变化' },
+    partial: { cls: 'stale', txt: '部分链接失败' },
+    failed: { cls: 'stale', txt: '拉取失败' },
+    unknown: { cls: 'unknown', txt: '结果未知' }
+  };
+  function checkStatus(s) {
+    if (s && s.check && s.check.status && CHECK_STATUS[s.check.status]) return CHECK_STATUS[s.check.status];
+    return { cls: 'fresh', txt: '仅记录云库写入时间' };
+  }
+  function resLabel(st) {
+    return ({ written: '已写入', unchanged: '内容无变化', failed: '失败', paused: '已暂停' })[st] || st || '未知';
+  }
+
   function renderSyncChip() {
     var s = state.sync;
-    var el = $('syncTime'), ageEl = $('syncAge'), chip = $('syncChip');
+    var el = $('syncTime'), ageEl = $('syncAge'), chip = $('syncChip'), lbl = $('syncLabel');
     if (!el || !chip) return;
-    if (!s || !s.lastPullAt) {
+    var at = s && (s.lastCheckAt || s.lastPullAt);
+    if (!at) {
       el.textContent = '--';
       if (ageEl) ageEl.textContent = '';
       chip.className = 'sync-chip unknown';
-      chip.title = '暂时读不到同步时间';
+      chip.title = '还没有任何拉取记录';
       return;
     }
-    el.textContent = fmtDateTime(s.lastPullAt);
-    if (ageEl) ageEl.textContent = '· ' + relTime(s.lastPullAt);
-    var mins = (Date.now() - new Date(s.lastPullAt).getTime()) / 60000;
-    chip.className = 'sync-chip ' + (mins > 120 ? 'stale' : 'fresh');
-    chip.title = '上次拉取 ' + fmtDateTime(s.lastPullAt) + '（' + relTime(s.lastPullAt) + '）· 点击查看详情';
+    var st = checkStatus(s);
+    if (lbl) lbl.textContent = (s && s.lastCheckAt) ? '上次检查' : '上次写入';
+    el.textContent = fmtDateTime(at);
+    if (ageEl) ageEl.textContent = '· ' + relTime(at);
+    var mins = (Date.now() - new Date(at).getTime()) / 60000;
+    chip.className = 'sync-chip ' + (mins > 120 ? 'stale' : st.cls);
+    chip.title = '上次检查 ' + fmtDateTime(at) + '（' + relTime(at) + '）· ' + st.txt + ' · 点击查看详情';
   }
 
   function fetchSync() {
@@ -1328,16 +1347,46 @@
   function renderSyncModal() {
     var s = state.sync || {};
     var mods = s.modules || [];
-    $('syncSub').textContent = s.lastPullAt
-      ? ('上次拉取检查 ' + fmtDateTime(s.lastPullAt) + '（' + relTime(s.lastPullAt) + '）· 内容无变化时会跳过下载')
+    var st = checkStatus(s);
+    var at = s.lastCheckAt || s.lastPullAt;
+    $('syncSub').textContent = at
+      ? ('最近一次检查 ' + fmtDateTime(at) + '（' + relTime(at) + '）· ' + st.txt)
       : '暂无同步记录';
 
     var html = '<div class="sync-sum">' +
-      '<div class="ss-item"><div class="ss-k">上次拉取检查</div><div class="ss-v">' + esc(fmtDateTime(s.lastPullAt)) + '</div><div class="ss-s">' + esc(relTime(s.lastPullAt)) + '</div></div>' +
-      '<div class="ss-item"><div class="ss-k">最后写入云库</div><div class="ss-v">' + esc(fmtDateTime(s.latestWriteAt)) + '</div><div class="ss-s">' + esc(relTime(s.latestWriteAt)) + '</div></div>' +
+      '<div class="ss-item"><div class="ss-k">上次检查</div><div class="ss-v">' + esc(fmtDateTime(at)) + '</div>' +
+      '<div class="ss-s">' + esc(at ? relTime(at) : '—') + ' · ' + esc(st.txt) + '</div></div>' +
+      '<div class="ss-item"><div class="ss-k">最后写入云库</div><div class="ss-v">' + esc(fmtDateTime(s.latestWriteAt)) + '</div>' +
+      '<div class="ss-s">' + esc(s.latestWriteAt ? relTime(s.latestWriteAt) : '—') + '</div></div>' +
       '<div class="ss-item"><div class="ss-k">云数据库</div><div class="ss-v">' + (s.cloudEnabled ? '已连接' : '未配置') + '</div><div class="ss-s">' +
       (s.cloudEnabled ? '数据以云库为准' : '页面可能没有任何数据') + '</div></div>' +
       '</div>';
+
+    // 本次检查明细：把"拉到了但内容没变"这种关键状态显式说出来，
+    // 否则用户点了立即同步、页面时间不动，会以为程序没跑。
+    var results = (s.check && s.check.results) || [];
+    if (results.length) {
+      html += '<div class="sec-title">最近一次检查明细</div><div class="chk-list">' +
+        results.map(function (r) {
+          var cls = r.status === 'written' ? 'ok' : (r.status === 'unchanged' ? 'same' : 'bad');
+          return '<div class="chk-row"><span class="chk-name">' + esc(r.label || '—') + '</span>' +
+            '<span class="chk-tag ' + cls + '">' + esc(resLabel(r.status)) + '</span>' +
+            '<span class="chk-detail">' + esc(r.detail || '') + '</span></div>';
+        }).join('') + '</div>';
+    }
+
+    if (s.check && s.check.status) {
+      var tips = {
+        unchanged: '本次检查完成，但没有向云库写入新数据 —— 说明源文档内容与上次完全一致。页面上「最后写入云库」的时间只会在数据真正变化时前进，这是正常的。',
+        written: '本次检查已把最新数据写入云库，上方「最后写入云库」的时间会同步前进。',
+        partial: '本次检查：能拉到的已经处理，另有链接拉取失败（原因见上方明细）。失败链接需要在 WPS 里解除「禁止下载」或恢复共享，然后重跑「立即同步一次」。',
+        failed: '本次检查没有写入任何数据，链接拉取失败（原因见上方明细）。'
+      };
+      if (tips[s.check.status]) {
+        html += '<div class="notice' + (s.check.status === 'failed' || s.check.status === 'partial' ? ' warn' : '') +
+          '" style="margin-top:12px"><span class="ni">i</span><span>' + tips[s.check.status] + '</span></div>';
+      }
+    }
 
     html += '<div class="sec-title">各模块最后写入时间</div>';
     if (mods.length) {
@@ -1359,13 +1408,10 @@
           (bad ? '已暂停 · 连续失败 ' + l.fail + ' 次（' + esc(l.error || '未知原因') + '）' : '正常') + '</span>' +
           '<span class="pr-time">' + esc(fmtDateTime(l.at)) + '</span></div>';
       });
-    } else {
-      html += '<div class="notice" style="margin-top:14px"><span class="ni">i</span><span>' +
-        '当前部署在云端，真正的「拉取」由你本机的同步助手执行，这里显示的是它把数据写进云库的时间。</span></div>';
     }
 
-    html += '<div class="modal-foot"><span class="muted-sm">自动刷新：页面每 60 秒拉一次云库；同步助手每 ' +
-      (s.refreshMinutes || 20) + ' 分钟检查一次源文档。</span>' +
+    html += '<div class="modal-foot"><span class="muted-sm">真正的拉取由你本机运行的同步助手执行（' +
+      (s.refreshMinutes || 20) + ' 分钟一轮）；页面上想立刻看到结果，双击本机「立即同步一次.bat」，然后点右边刷新。</span>' +
       '<button class="tbtn primary" data-role="refresh">立即刷新</button></div>';
 
     $('syncBody').innerHTML = html;
@@ -1833,6 +1879,7 @@
     bindChartTip();
     setInterval(tickClock, 30000); tickClock();
     setInterval(renderSyncChip, 20000);   // 相对时间（几分钟前）跟着走
+    setInterval(fetchSync, 60000);        // 本机同步助手在后台拉完后，胶囊能自己跟上
 
     fetch('/api/me?_t=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' })
       .then(function (r) { return r.json(); })

@@ -87,6 +87,7 @@ async function getModulesMerged() {
   }
   const modules = Object.assign({}, local.modules || {}, cloud.modules || {});
   delete modules.__probe__;
+  delete modules.__sync;   // 拉取心跳记录，只给 /api/sync 用，不是业务模块
   return {
     updatedAt: laterOf(local.updatedAt, cloud.updatedAt),
     modules: modules,

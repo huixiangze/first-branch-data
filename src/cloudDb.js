@@ -151,6 +151,13 @@ async function upsertModule(module, payload) {
   });
 }
 
+// 只取单个模块的 payload（轻量，不把整库拉下来）
+async function getModule(module) {
+  const rows = await request('GET', '?select=payload&module=eq.' + encodeURIComponent(module) + '&limit=1');
+  const r = Array.isArray(rows) ? rows[0] : null;
+  return r ? r.payload : null;
+}
+
 // 删除单个模块（回退到本地数据）
 async function deleteModule(module) {
   return request('DELETE', '?module=eq.' + encodeURIComponent(module));
@@ -173,5 +180,6 @@ module.exports = {
   listModules: listModules,
   listTimes: listTimes,
   upsertModule: upsertModule,
+  getModule: getModule,
   deleteModule: deleteModule
 };
