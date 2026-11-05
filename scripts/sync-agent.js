@@ -93,6 +93,38 @@ function saveState(st) {
   try { fs.writeFileSync(STATE_FILE, JSON.stringify(st, null, 2), 'utf8'); } catch (e) { log('状态写入失败：' + e.message); }
 }
 
+// ------------------------------------------------- 单实例锁（防止开两个助手重复上传）
+const LOCK_FILE = path.join(CFG_DIR, 'agent.lock');
+
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (e) { return e.code === 'EPERM'; }
+}
+
+function acquireLock() {
+  try {
+    const pid = parseInt(String(fs.readFileSync(LOCK_FILE, 'utf8')).trim(), 10);
+    if (pid && pid !== process.pid && pidAlive(pid)) {
+      console.error('已有同步助手在运行（PID ' + pid + '），本次不再启动。');
+      console.error('如需重启：先结束该进程，或运行 查看同步状态.bat 查看。');
+      return false;
+    }
+  } catch (e) { /* 没有锁文件，正常 */ }
+
+  fs.mkdirSync(CFG_DIR, { recursive: true });
+  fs.writeFileSync(LOCK_FILE, String(process.pid), 'utf8');
+
+  const release = function () {
+    try {
+      if (String(fs.readFileSync(LOCK_FILE, 'utf8')).trim() === String(process.pid)) fs.unlinkSync(LOCK_FILE);
+    } catch (e) { /* ignore */ }
+  };
+  process.on('exit', release);
+  process.on('SIGINT', function () { release(); process.exit(0); });
+  process.on('SIGTERM', function () { release(); process.exit(0); });
+  return true;
+}
+
 // ---------------------------------------------------------------- 通用工具
 function decodeXml(s) {
   return s
@@ -702,6 +734,12 @@ async function main() {
     recs.sort((a, b) => String(b[1].at).localeCompare(String(a[1].at))).slice(0, 20).forEach(([f, r]) => {
       console.log(`  [${r.ok ? '成功' : (r.skipped || '失败')}] ${path.basename(f)} -> ${r.module}  ${r.at}${r.error ? '  ' + r.error : ''}`);
     });
+    return;
+  }
+
+  const resident = !opts.once && !opts.status && !opts.dry && fi < 0;
+  if (resident && !acquireLock()) {
+    process.exitCode = 0;
     return;
   }
 
