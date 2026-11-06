@@ -14,59 +14,26 @@ const store = require('./src/store');
 const cloudDb = require('./src/cloudDb');
 const kdocsMeta = require('./src/kdocsMeta');
 const fetcher = require('./src/wpsFetcher');
+const accounts = require('./src/accounts');
 
 const PORT = process.env.PORT || 8090;
 
-// ---- 账号配置：优先环境变量（云托管镜像里不含敏感文件），其次 config/users.json ----
-let USERS_SOURCE = 'config/users.json';
-
-function loadUsersConfig() {
-  const inline = process.env.DP_USERS_JSON;
-  if (inline && inline.trim()) {
-    try {
-      USERS_SOURCE = '环境变量 DP_USERS_JSON';
-      return JSON.parse(inline);
-    } catch (e) {
-      console.error('[config] 环境变量 DP_USERS_JSON 不是合法 JSON：' + e.message);
-      process.exit(1);
-    }
-  }
-  const u = process.env.DP_ADMIN_USER;
-  const p = process.env.DP_ADMIN_PASS;
-  if (u && p) {
-    USERS_SOURCE = '环境变量 DP_ADMIN_USER';
-    return {
-      users: [{
-        username: u,
-        password: p,
-        name: process.env.DP_ADMIN_NAME || u,
-        role: process.env.DP_ADMIN_ROLE || '管理员'
-      }],
-      sessionSecret: process.env.DP_SESSION_SECRET || '',
-      sessionHours: Number(process.env.DP_SESSION_HOURS || 12)
-    };
-  }
-  const file = path.join(ROOT, 'config', 'users.json');
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch (e) {
-    console.error('[config] 找不到账号配置：' + file);
-    console.error('[config] 云托管请设置环境变量 DP_ADMIN_USER + DP_ADMIN_PASS（推荐），');
-    console.error('[config] 或用 DP_USERS_JSON 传整段 JSON；本地开发可从 config/users.example.json 复制一份。');
-    process.exit(1);
-  }
+// ---- 账号：由 src/accounts 统一管理（云库持久化 / 本地文件兜底 / 环境变量种子）----
+const BASE_CFG = accounts.loadBaseConfig() || {};
+const SECRET = BASE_CFG.sessionSecret || process.env.DP_SESSION_SECRET || 'default-secret';
+const SESSION_HOURS = Number(BASE_CFG.sessionHours || 12);
+if (!accounts.loadBaseConfig()) {
+  console.error('[config] 未找到账号配置，且没有任何可用种子账号。');
+  console.error('[config] 云托管请设置环境变量 DP_ADMIN_USER + DP_ADMIN_PASS，或用 DP_USERS_JSON 传整段 JSON；');
+  console.error('[config] 本地开发可从 config/users.example.json 复制一份为 config/users.json。');
 }
-
-const users = loadUsersConfig();
-const SECRET = users.sessionSecret || process.env.DP_SESSION_SECRET || 'default-secret';
-const SESSION_HOURS = Number(users.sessionHours || 12);
 
 // ---- 启动自检：把「配置从哪来」打进日志，避免云端排查靠猜 ----
 function logSelfCheck() {
-  const n = (users.users || []).length;
-  console.log('[config] 账号来源：' + USERS_SOURCE + '（' + n + ' 个账号：' +
-    (users.users || []).map(function (x) { return x.username; }).join(', ') + '）');
-  console.log('[config] 会话密钥：' + (users.sessionSecret || process.env.DP_SESSION_SECRET ? '已设置' : '未设置，使用默认值（不安全）') +
+  const st = accounts.stats();
+  const names = accounts.all().map(function (x) { return x.username; }).join(', ');
+  console.log('[config] 账号来源：' + accounts.storageMode() + '（' + st.total + ' 个账号：' + names + '）');
+  console.log('[config] 会话密钥：' + (BASE_CFG.sessionSecret || process.env.DP_SESSION_SECRET ? '已设置' : '未设置，使用默认值（不安全）') +
     '；有效期 ' + SESSION_HOURS + ' 小时');
   const c = cloudDb.describe();
   if (c.enabled) {
@@ -100,7 +67,6 @@ function detectCsvShape(headers) {
   return null;
 }
 
-function sha256(s) { return crypto.createHash('sha256').update(String(s)).digest('hex'); }
 function hmac(s) { return crypto.createHmac('sha256', SECRET).update(s).digest('hex'); }
 
 function makeToken(username) {
@@ -122,8 +88,13 @@ function verifyToken(token) {
   return username;
 }
 
-function findUser(username) {
-  return (users.users || []).find(function (u) { return u.username === username; });
+// 令牌有效 + 账号仍存在且未被停用，才算登录态（删号/停用立即失效）
+function currentUser(req) {
+  const username = verifyToken(getCookie(req, 'dp_token'));
+  if (!username) return null;
+  const u = accounts.find(username);
+  if (!u || u.status !== 'active') return null;
+  return u;
 }
 
 // ---- 同步状态（页面顶部「上次拉取时间」的数据源）----
@@ -168,7 +139,7 @@ async function buildSyncReport() {
     try { times = await cloudDb.listTimes(); } catch (e) { times = {}; }
   }
   const cloudKeys = Object.keys(times);
-  const mods = Object.keys(merged.modules || {}).map(function (k) {
+  const mods = Object.keys(merged.modules || {}).filter(function (k) { return k.indexOf('__') !== 0; }).map(function (k) {
     const m = merged.modules[k] || {};
     if (!m || !Object.keys(m).length) return null;                    // 空模块（历史占位）不展示
     if (cloudKeys.length && cloudKeys.indexOf(k) < 0) return null;    // 只报云库里真实存在的模块
@@ -287,7 +258,8 @@ function getCookie(req, name) {
   return m ? decodeURIComponent(m[2]) : null;
 }
 function getSessionUser(req) {
-  return verifyToken(getCookie(req, 'dp_token'));
+  const u = currentUser(req);
+  return u ? u.username : null;
 }
 
 function sendJson(res, code, obj) {
@@ -304,15 +276,24 @@ async function handleApi(req, res, pathname) {
       return;
     }
     const b = await readBody(req);
-    const u = findUser(b.username);
-    if (u && sha256(b.password) === sha256(u.password)) {
+    const r = accounts.verify(b.username, b.password);
+    if (r && r.error) {
+      sendJson(res, 403, { ok: false, error: r.error });
+      return;
+    }
+    if (r && r.user) {
       noteLoginOk(ip);
+      const u = r.user;
       const token = makeToken(u.username);
+      accounts.markLogin(u.username);
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
         'Set-Cookie': cookieHeader(token, SESSION_HOURS * 3600)
       });
-      res.end(JSON.stringify({ ok: true, user: { username: u.username, name: u.name, role: u.role } }));
+      res.end(JSON.stringify({
+        ok: true,
+        user: { username: u.username, name: u.name, role: u.role, isAdmin: accounts.isAdmin(u) }
+      }));
     } else {
       noteLoginFail(ip);
       sendJson(res, 401, { ok: false, error: '账号或密码错误' });
@@ -330,9 +311,93 @@ async function handleApi(req, res, pathname) {
   }
 
   if (pathname === '/api/me') {
-    const username = getSessionUser(req);
-    const u = username ? findUser(username) : null;
-    sendJson(res, 200, { user: u ? { username: u.username, name: u.name, role: u.role } : null });
+    const u = currentUser(req);
+    sendJson(res, 200, {
+      user: u ? { username: u.username, name: u.name, role: u.role, isAdmin: accounts.isAdmin(u) } : null
+    });
+    return;
+  }
+
+  // ===== 权限管理：账号列表与增删改（仅平台管理员）=====
+  if (pathname === '/api/users' && req.method === 'GET') {
+    const me = currentUser(req);
+    if (!me) { sendJson(res, 401, { ok: false, error: '未登录' }); return; }
+    if (!accounts.isAdmin(me)) { sendJson(res, 403, { ok: false, error: '仅平台管理员可查看账号列表' }); return; }
+    sendJson(res, 200, {
+      ok: true,
+      users: accounts.all().map(accounts.publicView),
+      stats: accounts.stats(),
+      storage: accounts.storageMode(),
+      roles: accounts.roles(),
+      me: me.username
+    });
+    return;
+  }
+
+  if (pathname === '/api/users' && req.method === 'POST') {
+    const me = currentUser(req);
+    if (!me) { sendJson(res, 401, { ok: false, error: '未登录' }); return; }
+    if (!accounts.isAdmin(me)) { sendJson(res, 403, { ok: false, error: '仅平台管理员可创建账号' }); return; }
+    try {
+      const b = await readBody(req);
+      const u = await accounts.create(me, {
+        username: b.username,
+        name: b.name,
+        password: b.password,
+        role: b.role
+      });
+      sendJson(res, 200, { ok: true, user: u, stats: accounts.stats(), storage: accounts.storageMode() });
+    } catch (e) {
+      sendJson(res, 400, { ok: false, error: e.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/users/update' && req.method === 'POST') {
+    const me = currentUser(req);
+    if (!me) { sendJson(res, 401, { ok: false, error: '未登录' }); return; }
+    if (!accounts.isAdmin(me)) { sendJson(res, 403, { ok: false, error: '仅平台管理员可修改账号' }); return; }
+    try {
+      const b = await readBody(req);
+      const u = await accounts.update(me, {
+        username: b.username,
+        name: b.name,
+        role: b.role,
+        status: b.status,
+        password: b.password
+      });
+      sendJson(res, 200, { ok: true, user: u, stats: accounts.stats() });
+    } catch (e) {
+      sendJson(res, 400, { ok: false, error: e.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/users/delete' && req.method === 'POST') {
+    const me = currentUser(req);
+    if (!me) { sendJson(res, 401, { ok: false, error: '未登录' }); return; }
+    if (!accounts.isAdmin(me)) { sendJson(res, 403, { ok: false, error: '仅平台管理员可删除账号' }); return; }
+    try {
+      const b = await readBody(req);
+      await accounts.remove(me, b.username);
+      sendJson(res, 200, { ok: true, stats: accounts.stats() });
+    } catch (e) {
+      sendJson(res, 400, { ok: false, error: e.message });
+    }
+    return;
+  }
+
+  // 本人修改密码（任何登录用户）
+  if (pathname === '/api/users/password' && req.method === 'POST') {
+    const me = currentUser(req);
+    if (!me) { sendJson(res, 401, { ok: false, error: '未登录' }); return; }
+    try {
+      const b = await readBody(req);
+      await accounts.changeOwnPassword(me, b.oldPassword, b.newPassword);
+      sendJson(res, 200, { ok: true });
+    } catch (e) {
+      sendJson(res, 400, { ok: false, error: e.message });
+    }
     return;
   }
 
@@ -476,7 +541,7 @@ async function handleApi(req, res, pathname) {
     if (!cloudDb.isEnabled()) { sendJson(res, 200, { ok: true, enabled: false, modules: [] }); return; }
     try {
       const c = await cloudDb.listModules();
-      const keys = Object.keys(c.modules || {});
+      const keys = Object.keys(c.modules || {}).filter(function (k) { return k.indexOf('__') !== 0; });
       const modules = keys.map(function (k) {
         const p = c.modules[k] || {};
         return {
@@ -519,6 +584,15 @@ async function requestHandler(req, res) {
     catch (e) { sendJson(res, 500, { ok: false, error: e.message }); }
     return;
   }
+  // 数据后台（云库模块管理）只对平台管理员开放
+  if (pathname === '/admin.html' || pathname === '/admin') {
+    const u = currentUser(req);
+    if (!u || !accounts.isAdmin(u)) {
+      res.writeHead(302, { Location: '/', 'Cache-Control': 'no-store' });
+      res.end();
+      return;
+    }
+  }
   serveStatic(req, res, pathname);
 }
 
@@ -546,6 +620,11 @@ function loadSslOptions() {
 // ---- 启动 + 定时刷新 ----
 store.ensureDirs();
 (async function () {
+  try {
+    await accounts.init(); // 账号表：云库为准，首次用配置种子初始化
+  } catch (e) {
+    console.error('[accounts] 初始化失败，服务继续启动：' + e.message);
+  }
   try {
     await store.refreshAll(); // 启动时先取一次
   } catch (e) {

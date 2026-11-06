@@ -630,3 +630,37 @@ body.cm-open { overflow: hidden; }
   .topbar .search-trigger { width: 34px; height: 32px; justify-content: center; padding: 0; border-radius: 9px; }
   .topbar .search-trigger svg { width: 16px; height: 16px; }
 }
+
+/* ================= 权限管理 ================= */
+.acc-note {
+  font-size: 12.5px; color: var(--text-2); line-height: 1.75;
+  background: #f7f9fd; border: 1px solid var(--line); border-radius: var(--radius-s);
+  padding: 11px 14px; margin-bottom: 14px;
+}
+.acc-note b { color: var(--primary-d); }
+.acc-form {
+  display: flex; align-items: flex-end; flex-wrap: wrap; gap: 10px;
+  padding: 14px; background: #fbfcfe; border: 1px dashed #d8e1f0; border-radius: var(--radius-s);
+}
+.acc-field { display: flex; flex-direction: column; gap: 5px; }
+.acc-field label { font-size: 11.5px; color: var(--muted); font-weight: 600; }
+.acc-field .tinput { width: 168px; }
+.acc-field .tselect { height: 33px; }
+.acc-form .tbtn { height: 33px; }
+.acc-err {
+  margin-top: 12px; font-size: 12.5px; color: #b42318;
+  background: var(--red-l); border-radius: 8px; padding: 9px 12px;
+}
+.acc-ok {
+  margin-top: 12px; font-size: 12.5px; color: #087443;
+  background: var(--green-l); border-radius: 8px; padding: 9px 12px; line-height: 1.7;
+}
+.acc-ok b { font-family: ui-monospace, Menlo, Consolas, monospace; }
+.acc-foot { margin-top: 10px; font-size: 11.5px; color: var(--muted); }
+.acc-self { font-size: 11.5px; color: var(--muted); margin-left: 2px; }
+.tbtn.danger { color: #b42318; border-color: #f7d4d6; }
+.tbtn.danger:hover { background: var(--red-l); border-color: var(--red); color: #b42318; }
+@media (max-width: 860px) {
+  .acc-field .tinput { width: 100%; }
+  .acc-field { flex: 1 1 140px; }
+}

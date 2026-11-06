@@ -338,7 +338,8 @@
     { key: 'anchorPerformance', label: '主播业绩', group: '经营' },
     { key: 'forecast', label: '业绩预估', group: '经营' },
     { key: 'rongpin', label: '预估结算', group: '经营' },
-    { key: 'commodity', label: '商品结构', group: '货品' }
+    { key: 'commodity', label: '商品结构', group: '货品' },
+    { key: 'users', label: '权限管理', group: '系统', adminOnly: true }
   ];
 
   var state = {
@@ -351,7 +352,12 @@
     month: '',              // '' = 各页自动取最新月；'YYYY-MM' = 全局指定月份
     sync: null,             // /api/sync 返回的同步状态
     metric: {},             // 主播详情页的指标切换
-    profile: null           // 当前查看的主播名
+    profile: null,          // 当前查看的主播名
+    usersData: null,        // /api/users 返回的账号清单
+    usersLoading: false,
+    usersError: '',
+    accPwd: '',             // 新增账号表单的随机初始密码
+    lastCreated: null       // 最近创建的账号（用于提示账号+密码）
   };
 
   // ---------- 基础工具 ----------
@@ -1601,6 +1607,192 @@
     return html;
   }
 
+  // ---------- 权限管理（仅平台管理员） ----------
+  function isAdminUser() {
+    var u = state.user || {};
+    return u.isAdmin === true || u.role === '管理员';
+  }
+
+  function fmtDay(iso) {
+    if (!iso) return '—';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '—';
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  function randomPwd() {
+    var s = 'abcdefghjkmnpqrstuvwxyz23456789', out = '';
+    for (var i = 0; i < 8; i++) out += s.charAt(Math.floor(Math.random() * s.length));
+    return out;
+  }
+
+  function loadUsers() {
+    if (state.usersLoading) return;
+    state.usersLoading = true;
+    state.usersError = '';
+    fetch('/api/users?_t=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        state.usersLoading = false;
+        if (!j || !j.ok) state.usersError = (j && j.error) || '读取账号列表失败';
+        else state.usersData = j;
+        if (state.current === 'users') renderView(true);
+      })
+      .catch(function () {
+        state.usersLoading = false;
+        state.usersError = '网络错误，无法读取账号列表';
+        if (state.current === 'users') renderView(true);
+      });
+  }
+
+  function userApi(url, body, okMsg) {
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify(body || {})
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      if (!j || !j.ok) { toast((j && j.error) || '操作失败', 'bad'); return j; }
+      if (okMsg) toast(okMsg, 'ok');
+      state.usersData = null;
+      loadUsers();
+      return j;
+    }).catch(function () { toast('网络错误，请稍后再试', 'bad'); return { ok: false }; });
+  }
+
+  function viewUsers() {
+    if (!isAdminUser()) {
+      return '<div class="panel"><div class="panel-head"><div class="ph-title">权限管理</div></div>' +
+        '<div class="empty">仅平台管理员可以管理账号。</div></div>';
+    }
+    if (!state.usersData && !state.usersLoading) loadUsers();
+
+    var d = state.usersData;
+    var st = (d && d.stats) || { total: 0, active: 0, admins: 0 };
+    var html = '';
+
+    html += '<div class="panel"><div class="panel-head">' +
+      '<div class="ph-title">账号与权限</div>' +
+      '<span class="ph-sub">' + (d ? ('共 ' + st.total + ' 个账号 · ' + st.active + ' 个在用 · ' + st.admins + ' 个管理员')
+        : (state.usersLoading ? '加载中…' : '未加载')) + '</span></div>' +
+      '<div class="acc-note">这里是<b>所有能登录本中台</b>的账号。新建账号后，把「账号 + 初始密码」发给同事，' +
+      '对方在登录页输入即可进入。管理员可以新增账号、重置密码、停用或删除账号；账号被停用或删除后立即无法登录。</div>';
+
+    if (state.usersError) {
+      html += '<div class="acc-err">' + esc(state.usersError) + '</div>';
+    }
+    if (state.lastCreated) {
+      html += '<div class="acc-ok">已创建账号 <b>' + esc(state.lastCreated.username) + '</b>' +
+        (state.lastCreated.name ? '（' + esc(state.lastCreated.name) + '）' : '') +
+        '，初始密码 <b>' + esc(state.lastCreated.password) + '</b> —— 请把这两项转告对方；对方忘记密码时，可在本页「重置密码」重新设置。</div>';
+    }
+
+    if (!state.accPwd) state.accPwd = randomPwd();   // 预填一个随机密码，渲染多次保持不变
+    html += '<div class="acc-form">' +
+      '<div class="acc-field"><label>账号</label><input id="accUser" class="tinput" placeholder="如 zhangsan" autocomplete="off" /></div>' +
+      '<div class="acc-field"><label>姓名</label><input id="accName" class="tinput" placeholder="如 张三" autocomplete="off" /></div>' +
+      '<div class="acc-field"><label>初始密码</label><input id="accPass" class="tinput" placeholder="至少 6 位" autocomplete="new-password" value="' + esc(state.accPwd) + '" /></div>' +
+      '<div class="acc-field"><label>角色</label><select id="accRole" class="tselect">' +
+      '<option value="成员">成员 · 只看数据</option><option value="管理员">管理员 · 可管账号</option></select></div>' +
+      '<button class="tbtn primary" data-role="acc-create">创建账号</button>' +
+      '</div></div>';
+
+    if (d) {
+      var rows = (d.users || []).map(function (u) {
+        return Object.assign({}, u, {
+          roleLabel: u.role,
+          statusLabel: u.status === 'active' ? '在用' : '已停用'
+        });
+      });
+      html += '<div class="panel"><div class="panel-head">' +
+        '<div class="ph-title">账号清单</div>' +
+        '<span class="ph-sub">停用后该账号立即无法登录；内置管理员不可删除</span></div>' +
+        dataTable('users', [
+          { key: 'username', label: '账号' },
+          { key: 'name', label: '姓名' },
+          {
+            key: 'roleLabel', label: '角色', render: function (r) {
+              return r.role === '管理员' ? '<span class="tag blue">管理员</span>' : '<span class="tag gray">成员</span>';
+            }
+          },
+          {
+            key: 'statusLabel', label: '状态', render: function (r) {
+              return r.status === 'active' ? '<span class="tag green">在用</span>' : '<span class="tag red">已停用</span>';
+            }
+          },
+          { key: 'createdBy', label: '创建人', render: function (r) { return esc(r.createdBy || '—'); } },
+          { key: 'createdAt', label: '创建时间', cls: 'mono', render: function (r) { return fmtDay(r.createdAt); } },
+          { key: 'lastLoginAt', label: '最后登录', cls: 'mono', render: function (r) { return r.lastLoginAt ? fmtDateTime(r.lastLoginAt) : '—'; } },
+          {
+            key: 'op', label: '操作', render: function (r) {
+              var me = (state.user && state.user.username) === r.username;
+              var b = '<button class="tbtn sm" data-role="acc-pwd" data-u="' + esc(r.username) + '">重置密码</button>';
+              if (!r.builtin) {
+                b += '<button class="tbtn sm" data-role="acc-role" data-u="' + esc(r.username) + '" data-r="' +
+                  (r.role === '管理员' ? '成员' : '管理员') + '">' + (r.role === '管理员' ? '设为成员' : '设为管理员') + '</button>';
+              }
+              if (!r.builtin && !me) {
+                b += '<button class="tbtn sm" data-role="acc-toggle" data-u="' + esc(r.username) + '" data-st="' + esc(r.status) + '">' +
+                  (r.status === 'active' ? '停用' : '启用') + '</button>';
+                b += '<button class="tbtn sm danger" data-role="acc-del" data-u="' + esc(r.username) + '">删除</button>';
+              }
+              if (me) b += '<span class="acc-self">当前登录</span>';
+              return b;
+            }
+          }
+        ], rows, { pageSize: 20, searchPlaceholder: '搜索账号或姓名…' }) +
+        '<div class="acc-foot">存储方式：' + (d.storage === 'cloud' ? '云数据库（重启不丢）'
+          : d.storage === 'file' ? '本地 config/users.json' : '只读（无法保存新账号）') + '</div></div>';
+    }
+
+    return html;
+  }
+
+  function createAccount(btn) {
+    var username = (($('accUser') || {}).value || '').trim();
+    var name = (($('accName') || {}).value || '').trim();
+    var password = (($('accPass') || {}).value || '');
+    var role = (($('accRole') || {}).value || '成员');
+    if (!username) { toast('请填写账号', 'bad'); return; }
+    if (!password || password.length < 6) { toast('密码至少 6 位', 'bad'); return; }
+    btn.disabled = true;
+    userApi('/api/users', { username: username, name: name, password: password, role: role }, '账号已创建：' + username)
+      .then(function (j) {
+        btn.disabled = false;
+        if (j && j.ok) {
+          state.lastCreated = { username: username, name: name, password: password };
+          state.accPwd = '';   // 下一次渲染换一个新的随机初始密码
+        }
+      });
+  }
+
+  function resetAccPwd(username) {
+    var p = prompt('为「' + username + '」设置新密码（至少 6 位）：', randomPwd());
+    if (!p) return;
+    if (p.length < 6) { toast('密码至少 6 位', 'bad'); return; }
+    userApi('/api/users/update', { username: username, password: p }, '已重置密码：' + username)
+      .then(function (j) { if (j && j.ok) alert('「' + username + '」的新密码是：' + p + '\n\n请转告对方，登录后建议自行修改。'); });
+  }
+
+  function toggleAcc(username, status) {
+    var to = status === 'active' ? 'disabled' : 'active';
+    var tip = to === 'disabled'
+      ? '停用账号「' + username + '」？\n停用后该账号立即无法登录，可随时重新启用。'
+      : '启用账号「' + username + '」？';
+    if (!confirm(tip)) return;
+    userApi('/api/users/update', { username: username, status: to }, (to === 'disabled' ? '已停用：' : '已启用：') + username);
+  }
+
+  function delAcc(username) {
+    if (!confirm('删除账号「' + username + '」？\n删除后对方立即无法登录，且不可恢复。')) return;
+    userApi('/api/users/delete', { username: username }, '已删除：' + username);
+  }
+
+  function setAccRole(username, role) {
+    if (!confirm('把「' + username + '」的角色改为「' + role + '」？')) return;
+    userApi('/api/users/update', { username: username, role: role }, '已把「' + username + '」设为' + role);
+  }
+
   var VIEWS = {
     home: viewHome,
     anchorRank: viewAnchorRank,
@@ -1608,14 +1800,16 @@
     anchorPerformance: viewAnchorPerformance,
     commodity: viewCommodity,
     forecast: viewForecast,
-    rongpin: viewRongpin
+    rongpin: viewRongpin,
+    users: viewUsers
   };
 
   // ---------- 渲染 ----------
   function renderNav() {
     var nav = $('nav');
     var groups = {};
-    MODULES.forEach(function (m) { (groups[m.group] = groups[m.group] || []).push(m); });
+    MODULES.filter(function (m) { return !m.adminOnly || isAdminUser(); })
+      .forEach(function (m) { (groups[m.group] = groups[m.group] || []).push(m); });
     var html = '';
     Object.keys(groups).forEach(function (g) {
       html += '<div class="nav-group">' + esc(g) + '</div>';
@@ -1656,6 +1850,7 @@
 
   function switchModule(key) {
     if (!VIEWS[key]) key = 'home';
+    if (key === 'users' && !isAdminUser()) key = 'home';   // 非管理员不能进权限页
     state.current = key;
     try { history.replaceState(null, '', '#' + key); } catch (e) {}
     renderNav();
@@ -1668,6 +1863,7 @@
     if (!h) return null;
     var seg = h.split('/');
     if (!VIEWS[seg[0]]) return null;
+    if (seg[0] === 'users' && !isAdminUser()) return null;
     var arg = seg.slice(1).join('/');
     try { arg = decodeURIComponent(arg); } catch (e) {}
     return { view: seg[0], arg: arg || null };
@@ -1940,6 +2136,11 @@
           ], rowsAll, '主播榜单_全部.csv');
           return;
         }
+        if (role === 'acc-create') { createAccount(btn); return; }
+        if (role === 'acc-pwd') { resetAccPwd(btn.getAttribute('data-u')); return; }
+        if (role === 'acc-toggle') { toggleAcc(btn.getAttribute('data-u'), btn.getAttribute('data-st')); return; }
+        if (role === 'acc-del') { delAcc(btn.getAttribute('data-u')); return; }
+        if (role === 'acc-role') { setAccRole(btn.getAttribute('data-u'), btn.getAttribute('data-r')); return; }
       }
 
       // 快捷筛选
@@ -2274,6 +2475,8 @@
     $('app').classList.add('show');
     $('userName').textContent = user.name || user.username;
     $('avatar').textContent = (user.name || user.username || '?').charAt(0);
+    var al = document.querySelector('.admin-link');
+    if (al) al.style.display = isAdminUser() ? '' : 'none';
     var hs = parseHash();
     if (hs) {
       state.current = (hs.view === 'anchor' && !hs.arg) ? 'anchorRank' : hs.view;
