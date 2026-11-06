@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const zlib = require('zlib');
 
 const ROOT = __dirname;
 const PUBLIC = path.join(ROOT, 'public');
@@ -238,8 +239,16 @@ function serveStatic(req, res, urlPath) {
     const ext = path.extname(filePath).toLowerCase();
     // HTML 绝不缓存；JS/CSS 每次都要回源校验，避免浏览器/边缘节点拿旧脚本
     const cc = (ext === '.html') ? 'no-store' : 'no-cache, must-revalidate';
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': cc });
-    res.end(data);
+    const ct = MIME[ext] || 'application/octet-stream';
+    const headers = { 'Content-Type': ct, 'Cache-Control': cc, 'Vary': 'Accept-Encoding' };
+    let out = data;
+    if (data.length > 1024 && wantsGzip(req) && /^(text\/|image\/svg|application\/(json|javascript|xml))/.test(ct)) {
+      out = gzipCached('file:' + filePath, data);
+      headers['Content-Encoding'] = 'gzip';
+    }
+    headers['Content-Length'] = out.length;
+    res.writeHead(200, headers);
+    res.end(out);
   });
 }
 
@@ -262,9 +271,32 @@ function getSessionUser(req) {
   return u ? u.username : null;
 }
 
+// ---- gzip：接口与静态资源都压缩，降低大 JSON（/api/data 约 1.4MB）的传输时间 ----
+const gzCache = new Map();
+function wantsGzip(req) {
+  return /\bgzip\b/.test(String((req && req.headers && req.headers['accept-encoding']) || ''));
+}
+function gzipCached(key, buf) {
+  const hit = gzCache.get(key);
+  if (hit && hit.len === buf.length) return hit.gz;
+  const gz = zlib.gzipSync(buf, { level: 6 });
+  if (gzCache.size > 40) gzCache.clear();
+  gzCache.set(key, { len: buf.length, gz: gz });
+  return gz;
+}
+
 function sendJson(res, code, obj) {
-  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-  res.end(JSON.stringify(obj));
+  const req = res.req;
+  const body = Buffer.from(JSON.stringify(obj), 'utf8');
+  const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Vary': 'Accept-Encoding' };
+  let out = body;
+  if (body.length > 1024 && wantsGzip(req)) {
+    out = gzipCached('json:' + crypto.createHash('sha1').update(body).digest('base64'), body);
+    headers['Content-Encoding'] = 'gzip';
+  }
+  headers['Content-Length'] = out.length;
+  res.writeHead(code, headers);
+  res.end(out);
 }
 
 // ---- 路由 ----
