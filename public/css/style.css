@@ -138,7 +138,7 @@ body {
 .fresh-dot.warn i { background: var(--orange); box-shadow: 0 0 0 3px rgba(245,135,31,.14); }
 
 /* ================= KPI ================= */
-.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 16px; }
+.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(178px, 1fr)); gap: 14px; margin-bottom: 16px; }
 .kpi-card {
   background: var(--card); border-radius: var(--radius); padding: 17px 18px;
   box-shadow: var(--shadow); display: flex; gap: 13px; align-items: flex-start;

@@ -710,11 +710,20 @@
         panel('暂无数据', '', '<div class="empty">同步助手还没有把结算工作簿写进云库。确认助手在运行后，点击右上角「立即刷新」。</div>');
     }
 
-    var series = IN.activeDays(IN.dailySeries(rows), 'gmv');
+    var fullSeries = IN.dailySeries(rows);
+    var series = IN.activeDays(fullSeries, 'gmv');
+    var settleSeries = IN.activeDays(fullSeries, 'settle');
     var sparkVals = series.map(function (x) { return x.gmv; });
     var cur = series.length ? series[series.length - 1].gmv : 0;
     var prev = series.length > 1 ? series[series.length - 2].gmv : 0;
     var dod = prev > 0 ? ((cur - prev) / prev) * 100 : 0;
+    // 当日结算：取最新一个有结算数据的日期（与「当日 GMV」同口径=最新一日）
+    // 结算率优先用源表团队口径（rank.daily[].rate），避免与「预估结算」页出现两个说法
+    var lastSettle = settleSeries.length ? settleSeries[settleSeries.length - 1] : null;
+    var settleToday = lastSettle ? num(lastSettle.settle) : 0;
+    var teamDaily = (rank.daily || []).filter(function (x) { return num(x.settle) > 0; });
+    var teamLast = teamDaily.length ? teamDaily[teamDaily.length - 1] : null;
+    var settleRateToday = teamLast ? num(teamLast.rate) : (lastSettle ? num(lastSettle.rate) : 0);
     var activeAnchors = rows.filter(function (r) { return num(r.gmvCum) > 0; }).length;
     var totalGmv = num(s.gmvCum) || sparkVals.reduce(function (a, b) { return a + b; }, 0);
     var pm = pickMonth(anchorMonths());
@@ -731,13 +740,29 @@
     html += kpiCards([
       { icon: 'gmv', color: '#2f6fed', title: '累计下播 GMV', money: totalGmv, sub: activeAnchors + ' 位主播有产出', spark: sparkVals, go: 'anchorRank' },
       { icon: 'anchorPerformance', color: '#7a5cff', title: '当日 GMV', money: cur, sub: deltaHtml(dod) + ' 环比', spark: sparkVals.slice(-4), go: 'anchorPerformance' },
-      { icon: 'settle', color: '#12a76c', title: '预估结算 GMV', money: s.settleCum, sub: '整体 ' + pct1(s.calcRate), go: 'rongpin' },
+      {
+        icon: 'settle', color: '#12a76c', title: '当日结算 GMV', money: settleToday,
+        sub: (lastSettle ? esc(lastSettle.label) + ' · ' : '') + '结算率 ' + pct1(settleRateToday),
+        spark: settleSeries.map(function (x) { return x.settle; }).slice(-4), go: 'rongpin'
+      },
+      {
+        icon: 'rongpin', color: '#0d9488', title: '累计结算 GMV', money: s.settleCum,
+        sub: '风控后口径 · 整体 ' + pct1(s.calcRate), go: 'rongpin'
+      },
       { icon: 'rate', color: '#f5871f', title: '平均结算率', value: pct1(s.avgRate), unit: '', sub: '主播算术均值' }
     ]);
 
-    // 趋势
-    var trendSvg = CH.line(series.map(function (x) { return { label: x.label, value: wanNum(x.gmv) }; }), {
-      color: '#2f6fed', height: 250, fmt: function (v) { return v + '万'; }, yFmt: plainNum, showValue: series.length <= 8
+    // 趋势：日 GMV 与当日结算双线
+    var trendSvg = CH.multiLine([
+      { name: '日 GMV', color: '#2f6fed', points: series.map(function (x) { return { label: x.label, value: wanNum(x.gmv) }; }) },
+      { name: '当日结算', color: '#12a76c', dashed: true, points: series.map(function (x) { return { label: x.label, value: wanNum(x.settle) }; }) }
+    ], { height: 250, fmt: function (v) { return v + '万'; }, yFmt: plainNum });
+
+    // 累计曲线：下播 GMV vs 结算 GMV
+    var cumG = 0, cumS = 0;
+    var cumPoints = series.map(function (x) {
+      cumG += num(x.gmv); cumS += num(x.settle);
+      return { label: x.label, gmv: cumG, settle: cumS };
     });
 
     // 结算榜：只按风控后结算GMV排序，与下播GMV榜区分开
@@ -757,9 +782,10 @@
     }
 
     html += '<div class="grid-2">';
-    html += '<div class="panel chart-panel"><div class="panel-head"><div class="ph-title">每日 GMV 走势 <span class="ph-sub">全员合计 · 万元</span></div>' +
+    html += '<div class="panel chart-panel"><div class="panel-head"><div class="ph-title">每日 GMV 与结算走势 <span class="ph-sub">全员合计 · 万元</span></div>' +
       '<div class="ph-tools"><span class="ph-hint">点图表可放大</span><button class="tbtn sm" data-role="img">导出图片</button></div></div>' +
-      '<div class="legend"><span><i style="background:#2f6fed"></i>日 GMV</span><span>峰值 ' + wan(Math.max.apply(null, sparkVals)) + ' 万</span><span>均值 ' +
+      '<div class="legend"><span><i style="background:#2f6fed"></i>日 GMV</span><span><i style="background:#12a76c"></i>当日结算</span>' +
+      '<span>峰值 ' + wan(Math.max.apply(null, sparkVals)) + ' 万</span><span>均值 ' +
       wan(sparkVals.reduce(function (a, b) { return a + b; }, 0) / (sparkVals.length || 1)) + ' 万</span></div>' + trendSvg + '</div>';
 
     html += '<div class="panel"><div class="panel-head"><div class="ph-title">结算 GMV 排行 ' +
@@ -769,6 +795,21 @@
         ? bySettle.slice(0, 6).map(function (r, i) { return rankRow(r, i, wan(r.settleCum) + ' 万', '#12a76c'); }).join('')
         : '<div class="empty">本月还没有结算数据</div>') + '</div>';
     html += '</div>';
+
+    // 累计走势：下播 GMV 与结算 GMV 两条累计曲线
+    if (cumPoints.length >= 2) {
+      html += '<div class="panel chart-panel"><div class="panel-head"><div class="ph-title">累计 GMV 与结算走势 ' +
+        '<span class="ph-sub">逐日累加 · 万元</span></div>' +
+        '<div class="ph-tools"><span class="ph-hint">点图表可放大</span><button class="tbtn sm" data-role="img">导出图片</button></div></div>' +
+        '<div class="legend"><span><i style="background:#2f6fed"></i>累计下播 GMV</span>' +
+        '<span><i style="background:#12a76c"></i>累计结算 GMV</span>' +
+        '<span>累计结算率 ' + pct1(cumG > 0 ? (cumS / cumG) * 100 : 0) + '</span>' +
+        '<span>结算差额 ' + wan(cumG - cumS) + ' 万</span></div>' +
+        CH.multiLine([
+          { name: '累计下播', color: '#2f6fed', points: cumPoints.map(function (x) { return { label: x.label, value: wanNum(x.gmv) }; }) },
+          { name: '累计结算', color: '#12a76c', dashed: true, points: cumPoints.map(function (x) { return { label: x.label, value: wanNum(x.settle) }; }) }
+        ], { height: 250, fmt: function (v) { return v + '万'; }, yFmt: plainNum }) + '</div>';
+    }
 
     // 智能洞察（全宽）
     var cards = IN.build(d);
@@ -1583,8 +1624,13 @@
     html += monthNotice(pickMonth(anchorMonths()), '预估结算');
 
     var total = active.reduce(function (a, x) { return a + num(x.settle); }, 0);
+    var lastDay = active.length ? active[active.length - 1] : null;
     html += kpiCards([
-      { icon: 'settle', color: '#12a76c', title: '累计预估结算', money: s.settleCum, sub: '风控后口径' },
+      {
+        icon: 'settle', color: '#12a76c', title: '当日结算 GMV', money: lastDay ? num(lastDay.settle) : 0,
+        sub: lastDay ? (esc(lastDay.day) + ' · 结算率 ' + pct1(lastDay.rate)) : '暂无数据'
+      },
+      { icon: 'rongpin', color: '#0d9488', title: '累计结算 GMV', money: s.settleCum, sub: '风控后口径 · 当月累计' },
       { icon: 'rate', color: '#f5871f', title: '平均结算率', value: pct1(s.avgRate), unit: '', sub: '整体 ' + pct1(s.calcRate) },
       { icon: 'anchorPerformance', color: '#2f6fed', title: '已出数据', value: active.length, unit: '天', sub: '本月累计' },
       {
