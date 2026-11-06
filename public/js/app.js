@@ -336,6 +336,7 @@
     { key: 'home', label: '经营驾驶舱', group: '概览' },
     { key: 'anchorRank', label: '主播榜单', group: '经营' },
     { key: 'anchorPerformance', label: '主播业绩', group: '经营' },
+    { key: 'saleDetail', label: '主播售卖', group: '经营' },
     { key: 'forecast', label: '业绩预估', group: '经营' },
     { key: 'rongpin', label: '预估结算', group: '经营' },
     { key: 'commodity', label: '商品结构', group: '货品' },
@@ -1653,6 +1654,120 @@
     return html;
   }
 
+  // ---------- 主播售卖明细（2026年主播售卖表 10-12月） ----------
+  function viewSaleDetail() {
+    var m = modules().saleDetail || {};
+    var rows = m.rows || [];
+    var s = m.summary || {};
+    var byDate = m.byDate || [];
+    var byAnchor = m.byAnchor || [];
+
+    if (!rows.length) {
+      return viewHead('主播售卖明细', '等待数据接入') +
+        panel('暂无数据', '', '<div class="empty">还没有把「2026年主播售卖表（10-12月）」导入云库。<br/>' +
+          '在存有源表的电脑上执行 <b>python scripts/import_sale_detail.py --file 表路径</b>，' +
+          '再执行 <b>node scripts/push_sale_detail.js</b>。</div>');
+    }
+
+    function big(v) {
+      v = num(v);
+      if (Math.abs(v) >= 1e8) return { value: (v / 1e8).toFixed(2), unit: '亿' };
+      if (Math.abs(v) >= 1e4) return { value: (v / 1e4).toFixed(1), unit: '万' };
+      return { value: Math.round(v).toLocaleString('zh-CN'), unit: '' };
+    }
+    var qtyBig = big(s.qty);
+    var avgQty = Math.round(num(s.qty) / (num(s.days) || 1));
+
+    var html = viewHead('主播售卖明细',
+      (s.dateFrom ? '数据区间 <b>' + esc(s.dateFrom) + ' ~ ' + esc(s.dateTo) + '</b> · ' : '') +
+      (s.anchors || 0) + ' 位主播 · ' + (s.records || 0) + ' 条场次 · 来源 2026年主播售卖表',
+      '<span class="ph-hint">源表 1.8 GB · 单独低频同步</span>');
+
+    html += kpiCards([
+      {
+        icon: 'gmv', color: '#2f6fed', title: '累计销售额', money: s.sales,
+        sub: '客单价 ' + money(s.avgPrice) + ' · ' + (s.days || 0) + ' 天',
+        spark: byDate.map(function (x) { return num(x.sales); })
+      },
+      {
+        icon: 'commodity', color: '#7a5cff', title: '累计销量', value: qtyBig.value, unit: qtyBig.unit + '件',
+        sub: '日均 ' + avgQty.toLocaleString('zh-CN') + ' 件'
+      },
+      { icon: 'settle', color: '#12a76c', title: '累计利润', money: s.profit, sub: '毛利率 ' + pct1(s.marginRate) },
+      { icon: 'rate', color: '#f5871f', title: '平均退货率', value: pct1(s.avgReturnRate), unit: '', sub: '次日口径 · 场次均值' }
+    ]);
+
+    // 每日销售额 / 利润
+    var trend = CH.multiLine([
+      { name: '销售额', color: '#2f6fed', points: byDate.map(function (x) { return { label: String(x.date).slice(5), value: wanNum(x.sales) }; }) },
+      { name: '利润', color: '#12a76c', dashed: true, points: byDate.map(function (x) { return { label: String(x.date).slice(5), value: wanNum(x.profit) }; }) }
+    ], { height: 250, fmt: function (v) { return v + '万'; }, yFmt: plainNum });
+
+    var topAnchor = byAnchor.slice(0, 10);
+    var topBars = CH.hBars(topAnchor.map(function (a) {
+      return { label: a.anchor, value: wanNum(a.sales) };
+    }), { unit: ' 万', labelW: 88, fmt: function (v) { return v + '万'; } });
+
+    html += '<div class="grid-2">';
+    html += '<div class="panel chart-panel"><div class="panel-head"><div class="ph-title">每日销售额与利润 <span class="ph-sub">万元</span></div>' +
+      '<div class="ph-tools"><span class="ph-hint">点图表可放大</span><button class="tbtn sm" data-role="img">导出图片</button></div></div>' +
+      '<div class="legend"><span><i style="background:#2f6fed"></i>销售额</span><span><i style="background:#12a76c"></i>利润</span>' +
+      '<span>日均 ' + wan(num(s.sales) / (num(s.days) || 1)) + ' 万</span></div>' + trend + '</div>';
+    html += '<div class="panel chart-panel"><div class="panel-head"><div class="ph-title">主播销售额 TOP 10 <span class="ph-sub">万元</span></div>' +
+      '<div class="ph-tools"><span class="ph-hint">点图表可放大</span><button class="tbtn sm" data-role="img">导出图片</button></div></div>' + topBars + '</div>';
+    html += '</div>';
+
+    // 明细：最新日期在前，同日按销售额降序
+    var dailyRows = rows.slice().sort(function (a, b) {
+      if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+      return num(b.sales) - num(a.sales);
+    });
+
+    // 明细
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">每日售卖明细' +
+      '<span class="ph-sub">主播 × 日期 × 直播类型 · ' + rows.length + ' 条</span></div></div>' +
+      dataTable('saleDetail_daily', [
+        { key: 'date', label: '日期', cls: 'mono' },
+        { key: 'anchor', label: '主播' },
+        { key: 'type', label: '直播类型' },
+        { key: 'qty', label: '销量', cls: 'mono', render: function (r) { return num(r.qty).toLocaleString('zh-CN'); } },
+        { key: 'sales', label: '销售额(元)', cls: 'mono', render: function (r) { return money(r.sales); } },
+        { key: 'profit', label: '利润(元)', cls: 'mono', render: function (r) { return money(r.profit); } },
+        { key: 'nxSales', label: '次日销售额(元)', cls: 'mono', render: function (r) { return money(r.nxSales); } },
+        {
+          key: 'returnRate', label: '退货率', cls: 'mono', render: function (r) {
+            var v = num(r.returnRate);
+            var col = v >= 50 ? '#e5484d' : v >= 35 ? '#f5871f' : '#12a76c';
+            return '<span style="color:' + col + ';font-weight:700">' + pct1(v) + '</span>';
+          }
+        },
+        { key: 'd7Sales', label: '7日销售额(元)', cls: 'mono', render: function (r) { return money(r.d7Sales); } }
+      ], dailyRows, { pageSize: 20, exportName: '主播每日售卖明细', searchPlaceholder: '搜索主播 / 日期 / 直播类型…' }) + '</div>';
+
+    // 主播汇总
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">主播售卖汇总' +
+      '<span class="ph-sub">按累计销售额排序 · ' + byAnchor.length + ' 位</span></div></div>' +
+      dataTable('saleDetail_anchor', [
+        { key: 'rank', label: '#', cls: 'mono', render: function (r, i) { return i + 1; } },
+        { key: 'anchor', label: '主播' },
+        { key: 'days', label: '场次', cls: 'mono' },
+        { key: 'qty', label: '销量', cls: 'mono', render: function (r) { return num(r.qty).toLocaleString('zh-CN'); } },
+        { key: 'sales', label: '销售额(元)', cls: 'mono', render: function (r) { return money(r.sales); } },
+        { key: 'avgSales', label: '场均销售额(元)', cls: 'mono', render: function (r) { return money(r.avgSales); } },
+        { key: 'profit', label: '利润(元)', cls: 'mono', render: function (r) { return money(r.profit); } },
+        { key: 'margin', label: '毛利率', cls: 'mono', render: function (r) { return pct1(num(r.sales) > 0 ? (num(r.profit) / num(r.sales)) * 100 : 0); } },
+        {
+          key: 'returnRate', label: '退货率', cls: 'mono', render: function (r) {
+            var v = num(r.returnRate);
+            var col = v >= 50 ? '#e5484d' : v >= 35 ? '#f5871f' : '#12a76c';
+            return '<span style="color:' + col + ';font-weight:700">' + pct1(v) + '</span>';
+          }
+        }
+      ], byAnchor, { pageSize: 20, exportName: '主播售卖汇总', searchPlaceholder: '搜索主播…' }) + '</div>';
+
+    return html;
+  }
+
   // ---------- 权限管理（仅平台管理员） ----------
   function isAdminUser() {
     var u = state.user || {};
@@ -1844,6 +1959,7 @@
     anchorRank: viewAnchorRank,
     anchor: viewAnchorProfile,
     anchorPerformance: viewAnchorPerformance,
+    saleDetail: viewSaleDetail,
     commodity: viewCommodity,
     forecast: viewForecast,
     rongpin: viewRongpin,

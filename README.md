@@ -25,6 +25,22 @@ PORT=3000 node server.js  # 云托管（监听 PORT，绑定 0.0.0.0）
 `data/imports/bundle.json` → `scripts/push_bundle.js` 写入云库。
 Windows 下双击 `立即同步一次.bat`（Python 侧已强制 UTF-8，避免中文文件名乱码）。
 
+## 主播售卖明细（2026年主播售卖表 10-12月）
+
+这份源表 1.8 GB（59 个工作表，含商品图），**不走 20 分钟主同步**，单独低频导入。
+只抽取「单场汇总」这一张扁平表（主播 × 日期 × 直播类型），产物约 200 KB。
+
+```bash
+# 1) 抽数（流式，只读一张表，不整本进内存）
+python scripts/import_sale_detail.py --file "D:\...\2026年主播售卖表（10-12月）-第一分公司.xlsx"
+# 2) 写入云库 module=saleDetail
+node scripts/push_sale_detail.js
+```
+
+说明：WPS 云文档的下载接口对大文件走异步打包（`status=running` + `task_id`），
+且没有可查询任务状态的端点，脚本无法自行等待完成 —— 2 GB 级文件请先在 WPS 里
+「另存为」到本地，再跑上面两条命令。`单场汇总` 里多出的 2400 余行是空格式行，会被自动跳过。
+
 ## 常驻同步助手
 
 | 入口 | 用途 |
