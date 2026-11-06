@@ -725,7 +725,9 @@
       color: '#2f6fed', height: 250, fmt: function (v) { return v + '万'; }, yFmt: plainNum, showValue: series.length <= 8
     });
 
-    var byCum = rows.slice().sort(function (a, b) { return num(b.gmvCum) - num(a.gmvCum); });
+    // 结算榜：只按风控后结算GMV排序，与下播GMV榜区分开
+    var bySettle = rows.filter(function (r) { return num(r.settleCum) > 0; })
+      .sort(function (a, b) { return num(b.settleCum) - num(a.settleCum); });
     var mv = IN.movers(rows);
     var rated = rows.filter(function (r) { return num(r.gmvCum) > 0 && num(r.rate) > 0; });
     var avgRate = rated.length ? rated.reduce(function (a, r) { return a + num(r.rate); }, 0) / rated.length : 0;
@@ -745,9 +747,12 @@
       '<div class="legend"><span><i style="background:#2f6fed"></i>日 GMV</span><span>峰值 ' + wan(Math.max.apply(null, sparkVals)) + ' 万</span><span>均值 ' +
       wan(sparkVals.reduce(function (a, b) { return a + b; }, 0) / (sparkVals.length || 1)) + ' 万</span></div>' + trendSvg + '</div>';
 
-    html += '<div class="panel"><div class="panel-head"><div class="ph-title">累计 GMV 排行</div>' +
+    html += '<div class="panel"><div class="panel-head"><div class="ph-title">结算 GMV 排行 ' +
+      '<span class="ph-sub">风控后累计 · ' + bySettle.length + ' 位有结算</span></div>' +
       '<div class="ph-tools"><button class="tbtn sm" data-goto="anchorRank">查看全部</button></div></div>' +
-      byCum.slice(0, 6).map(function (r, i) { return rankRow(r, i, wan(r.gmvCum) + ' 万'); }).join('') + '</div>';
+      (bySettle.length
+        ? bySettle.slice(0, 6).map(function (r, i) { return rankRow(r, i, wan(r.settleCum) + ' 万', '#12a76c'); }).join('')
+        : '<div class="empty">本月还没有结算数据</div>') + '</div>';
     html += '</div>';
 
     // 智能洞察（全宽）
@@ -1261,6 +1266,23 @@
       (m.asOf ? ' · 截止 ' + esc(m.asOf) : ''));
     html += monthNotice(pm, '主播业绩快照');
 
+    var latest = sheets[sheets.length - 1];
+    var latestDate = String(latest.date || '');
+
+    // 快照是否落后于今天：源工作簿里没生成当天的日表时，这里如实说明，不静默留白
+    var nowD = new Date();
+    var todayStr = nowD.getFullYear() + '-' + String(nowD.getMonth() + 1).padStart(2, '0') + '-' +
+      String(nowD.getDate()).padStart(2, '0');
+    if (latestDate && latestDate < todayStr) {
+      var expectDay = Number(todayStr.slice(8, 10));
+      var syncInfo = state.sync || {};
+      html += '<div class="notice"><span class="ni">i</span><span>' +
+        '源工作簿里还没有 <b>' + expectDay + '日</b> 这张日快照，最新只到 <b>' + esc(latestDate) + '</b>，所以今天没有新增数据。' +
+        '同步助手上次检查是 <b id="perfCheckAt">' + esc(syncInfo.lastCheckAt ? fmtDateTime(syncInfo.lastCheckAt) : '—') + '</b>' +
+        '；等运营在源表里生成 ' + expectDay + '日 工作表后，下次检查（每 30 分钟）会自动接入。' +
+        '</span></div>';
+    }
+
     function pickCol(headers, names) {
       var i, j;
       for (i = 0; i < names.length; i++) {
@@ -1274,12 +1296,36 @@
       }
       return null;
     }
+    var rankAll = (modules().anchorRank || {}).rows || [];
+    var rankByName = {};
+    rankAll.forEach(function (r) { if (r.anchor) rankByName[r.anchor] = r; });
+
+    // 每日结算金额统一取自「汇总」页解析出来的每日数组（快照宽表里的日期列会随时间变动，
+    // 且同名日期列重复出现，按列名取数会错位）。同名主播只计一次，避免重复累加。
+    function settleOfSheet(sheet) {
+      var day = Number(String(sheet.date || '').slice(8, 10)) || 0;
+      if (day < 1 || day > 30) return 0;
+      var sum = 0, seen = {};
+      (sheet.rows || []).forEach(function (r) {
+        var n = String(r['主播名'] || '').trim();
+        if (!n || seen[n]) return;
+        seen[n] = 1;
+        var rk = rankByName[n];
+        if (rk) sum += num((rk.daily || [])[day - 1]);
+      });
+      return sum;
+    }
+
     var cards = sheets.map(function (s) {
       var cG = pickCol(s.headers, ['下播GMV']);
-      var cS = pickCol(s.headers, ['风控后结算GMV(预估拼接)(元)', '风控后结算GMV(元)']);
-      var tg = 0, ts = 0;
-      (s.rows || []).forEach(function (r) { if (cG) tg += num(r[cG]); if (cS) ts += num(r[cS]); });
-      return { name: s.name, date: s.date, gmv: tg, settle: ts, count: (s.rows || []).length, hasSettle: ts > 0 };
+      var tg = 0, names = {};
+      (s.rows || []).forEach(function (r) {
+        if (cG) tg += num(r[cG]);
+        var n = String(r['主播名'] || '').trim();
+        if (n) names[n] = 1;
+      });
+      var ts = settleOfSheet(s);
+      return { name: s.name, date: s.date, gmv: tg, settle: ts, count: Object.keys(names).length, hasSettle: ts > 0 };
     });
     var maxG = Math.max.apply(null, cards.map(function (c) { return c.gmv; }).concat([1]));
 
@@ -1298,18 +1344,68 @@
       }).join('') + '</div>';
     html += '</div>';
 
-    var latest = sheets[sheets.length - 1];
-    var cols = latest.headers.slice(0, 14).map(function (h) {
-      var isNum = /GMV|金额|率|数/.test(h);
-      var col = { key: h, label: h.length > 12 ? h.slice(0, 12) + '…' : h, cls: isNum ? 'mono' : '' };
-      if (/日期/.test(h)) {
-        col.render = function (r) { return esc(fmtExcelDate(r[h])); };
-      }
-      return col;
-    });
+    // 日快照的基础列（下播GMV/累计）准确，但宽表里「3日」「4日」等列名重复出现三次，
+    // 按列名取数会互相覆盖，导致表头和数据错位。所以结算金额改从汇总页的每日结算数组
+    // 按主播名 + 当日序号对齐，两个来源互相校验。
+    var latestDay = Number(latestDate.slice(8, 10)) || 0;
+    var seenName = {};
+    var perfRows = (latest.rows || []).map(function (r) {
+      var name = String(r['主播名'] || '').trim();
+      var rk = rankByName[name] || null;
+      var inRange = !!rk && latestDay >= 1 && latestDay <= 30;
+      var dup = !!seenName[name];
+      if (name) seenName[name] = 1;
+      return {
+        _date: fmtExcelDate(r['直播日期']) || latestDate,
+        _name: name,
+        _dup: dup,
+        _id: String(r['主播ID'] || ''),
+        _type: String(r['主播类型'] || ''),
+        _gmv: num(r['下播GMV']),
+        _share: num(r['分成后下播GMV']),
+        _cum: num(r['下播GMV累计']),
+        _prev: num(r['前日下播GMV累计']),
+        // 结算按主播计，同名多条记录只归到第一行，避免页面合计翻倍
+        _settle: (inRange && !dup) ? num((rk.daily || [])[latestDay - 1]) : 0,
+        _rate: (inRange && !dup) ? num((rk.rateDaily || [])[latestDay - 1]) : 0
+      };
+    }).filter(function (r) { return r._name; });
+
+    // 默认把有产出的排在前面，零产出沉底
+    perfRows.sort(function (a, b) { return (b._gmv - a._gmv) || (b._settle - a._settle); });
+
+    var totGmv = 0, totSettle = 0;
+    perfRows.forEach(function (r) { totGmv += r._gmv; totSettle += r._settle; });
+
+    function dash(v, fmt) { return v > 0 ? fmt(v) : '<span class="muted-sm">—</span>'; }
+
+    var cols = [
+      { key: '_date', label: '日期', cls: 'mono' },
+      {
+        key: '_name', label: '主播', render: function (r) {
+          return '<b class="a-link" data-profile="' + esc(r._name) + '" title="打开完整分析页">' + esc(r._name) + '</b>';
+        }
+      },
+      { key: '_id', label: '主播ID', cls: 'mono' },
+      { key: '_type', label: '类型' },
+      { key: '_gmv', label: '当日下播GMV(元)', cls: 'mono', render: function (r) { return dash(r._gmv, money); } },
+      { key: '_share', label: '分成后GMV(元)', cls: 'mono', render: function (r) { return dash(r._share, money); } },
+      { key: '_cum', label: '累计下播GMV(元)', cls: 'mono', render: function (r) { return dash(r._cum, money); } },
+      { key: '_prev', label: '前日累计GMV(元)', cls: 'mono', render: function (r) { return dash(r._prev, money); } },
+      { key: '_settle', label: '当日结算GMV(元)', cls: 'mono', render: function (r) {
+        if (r._dup) return '<span class="muted-sm" title="该主播有多条直播记录，结算已计入上方首行">—</span>';
+        return dash(r._settle, money);
+      } },
+      { key: '_rate', label: '结算率', cls: 'mono', render: function (r) {
+        if (r._dup) return '<span class="muted-sm" title="该主播有多条直播记录，结算率已计入上方首行">—</span>';
+        return dash(r._rate, pct1);
+      } }
+    ];
+
     html += '<div class="panel"><div class="panel-head"><div class="ph-title">' + esc(latest.name) + ' 快照明细</div>' +
-      '<span class="ph-sub">' + latest.date + ' · 展示前 14 列 / 共 ' + latest.headers.length + ' 列</span></div>' +
-      dataTable('anchorPerformance', cols, latest.rows || [], { exportName: '主播业绩_' + latest.name, pageSize: 20 }) + '</div>';
+      '<span class="ph-sub">' + esc(latestDate) + ' · ' + perfRows.length + ' 位主播 · 合计下播 ' + wan(totGmv) +
+      ' 万 · 结算 ' + wan(totSettle) + ' 万</span></div>' +
+      dataTable('anchorPerformance', cols, perfRows, { exportName: '主播业绩_' + latest.name, pageSize: 20 }) + '</div>';
     return html;
   }
 
@@ -1647,7 +1743,14 @@
   function fetchSync() {
     return fetch('/api/sync?_t=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' })
       .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (j) { if (j && j.ok) { state.sync = j; renderSyncChip(); } })
+      .then(function (j) {
+        if (!j || !j.ok) return;
+        state.sync = j;
+        renderSyncChip();
+        // 首次加载时快照页可能先渲染、同步信息后到，补一次文字
+        var note = document.getElementById('perfCheckAt');
+        if (note) note.textContent = j.lastCheckAt ? fmtDateTime(j.lastCheckAt) : '—';
+      })
       .catch(function () { });
   }
 

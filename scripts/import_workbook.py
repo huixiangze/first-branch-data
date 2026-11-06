@@ -231,18 +231,42 @@ def build_daily_sheet(rows, sheet_name):
     for r in rows[:3]:
         for k in r:
             maxc = max(maxc, k)
+    # 只保留前面的基础信息块（直播日期 / 主播 / 下播GMV / 累计…）。
+    # 后面的 30 天宽表是快照时刻的预估列，同名日期列重复出现，保留下来既占体积又容易误读；
+    # 每日结算金额统一由「汇总」页解析，见 build_anchor_rank 的 daily 数组。
+    base_cols = 0
+    for c in range(1, maxc + 1):
+        if main.get(c, '') and not sub.get(c, ''):
+            base_cols = c
+        else:
+            break
+    if base_cols:
+        maxc = base_cols
+    # 宽表里「2日/3日/…」这类子表头会在多个数值块里重复出现（风控后结算、预估结算…），
+    # 只按子表头命名会互相覆盖，导致前端表头与数据错位。这里用所属父表头做前缀消歧。
+    group = ''
     for c in range(1, maxc + 1):
         a = main.get(c, '')
         b = sub.get(c, '')
+        if a:
+            group = a
         if a and b and b not in a:
             headers.append(a + '·' + b)
         elif a:
             headers.append(a)
         elif b:
-            headers.append(b)
+            headers.append((group + '·' + b) if group else b)
         else:
-            headers.append('列%d' % c)
+            headers.append((group + '·列%d' % c) if group else '列%d' % c)
     headers = headers[1:]
+    # 兜底：仍有重名就加序号，保证表头唯一
+    seen = {}
+    for i, h in enumerate(headers):
+        if h in seen:
+            seen[h] += 1
+            headers[i] = '%s#%d' % (h, seen[h])
+        else:
+            seen[h] = 0
 
     data = [r for r in rows[2:] if r.get(4, '') or r.get(2, '')]
     out = []
