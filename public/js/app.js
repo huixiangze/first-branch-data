@@ -258,9 +258,9 @@
       return '<div class="empty">这类图表暂不支持表格视图</div>';
     }
     var html = '<div class="cm-table-wrap"><table class="tbl compact"><thead><tr>' +
-      head.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') + '</tr></thead><tbody>' +
+      head.map(function (h, i) { return '<th' + (i ? ' class="num"' : '') + '>' + esc(h) + '</th>'; }).join('') + '</tr></thead><tbody>' +
       rows.map(function (r) {
-        return '<tr>' + r.map(function (c, i) { return '<td' + (i ? ' class="mono"' : '') + '>' + esc(c) + '</td>'; }).join('') + '</tr>';
+        return '<tr>' + r.map(function (c, i) { return '<td' + (i ? ' class="mono num"' : '') + '>' + esc(c) + '</td>'; }).join('') + '</tr>';
       }).join('') + '</tbody></table></div>';
     return html;
   }
@@ -612,11 +612,20 @@
     return out;
   }
 
+  // 表头与单元格必须用同一套类名，否则会出现「表头靠右、数据靠左」的假错位。
+  // .mono 只负责等宽数字，不含对齐；右对齐由 .num 提供，这里统一补齐。
+  function colClass(c) {
+    var cls = (c && c.cls) ? String(c.cls) : '';
+    if (/\bmono\b/.test(cls) && !/\bnum\b/.test(cls)) cls += ' num';
+    return cls;
+  }
+
   function cellHtml(c, r, idx) {
-    if (c.render) return '<td class="' + (c.cls || '') + '">' + c.render(r, idx) + '</td>';
+    var cls = colClass(c);
+    if (c.render) return '<td class="' + cls + '">' + c.render(r, idx) + '</td>';
     if (c.tag === 'status') return '<td>' + statusTag(r[c.key]) + '</td>';
-    if (c.fmt) return '<td class="' + (c.cls || '') + '">' + c.fmt(r[c.key], r) + '</td>';
-    return '<td class="' + (c.cls || '') + '">' + esc(r[c.key]) + '</td>';
+    if (c.fmt) return '<td class="' + cls + '">' + c.fmt(r[c.key], r) + '</td>';
+    return '<td class="' + cls + '">' + esc(r[c.key]) + '</td>';
   }
 
   // 只渲染表体（供局部刷新，避免整页重绘丢焦点）
@@ -625,7 +634,7 @@
     var sk = state.sort[mod];
     var head = '<tr>' + cols.map(function (c) {
       var ind = (sk && sk.key === c.key) ? (sk.dir === 'asc' ? ' <span style="color:#2f6fed">▲</span>' : ' <span style="color:#2f6fed">▼</span>') : '';
-      var cls = 'sortable' + (c.cls === 'mono' ? ' num' : '');
+      var cls = 'sortable ' + colClass(c);
       return '<th class="' + cls + '" data-col="' + c.key + '">' + esc(c.label) + ind + '</th>';
     }).join('') + '</tr>';
 
