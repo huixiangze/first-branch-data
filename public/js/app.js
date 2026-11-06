@@ -358,7 +358,8 @@
     usersLoading: false,
     usersError: '',
     accPwd: '',             // 新增账号表单的随机初始密码
-    lastCreated: null       // 最近创建的账号（用于提示账号+密码）
+    lastCreated: null,      // 最近创建的账号（用于提示账号+密码）
+    saleFilter: { anchor: '', date: '' }   // 主播售卖页：商品明细的筛选条件
   };
 
   // ---------- 基础工具 ----------
@@ -1665,8 +1666,9 @@
     if (!rows.length) {
       return viewHead('主播售卖明细', '等待数据接入') +
         panel('暂无数据', '', '<div class="empty">还没有把「2026年主播售卖表（10-12月）」导入云库。<br/>' +
-          '在存有源表的电脑上执行 <b>python scripts/import_sale_detail.py --file 表路径</b>，' +
-          '再执行 <b>node scripts/push_sale_detail.js</b>。</div>');
+          '在存有源表的电脑上执行 <b>python scripts/import_sale_detail.py --file 表路径</b> 与 ' +
+          '<b>python scripts/import_sale_products.py --file 表路径</b>，' +
+          '再执行 <b>node scripts/push_sale_detail.js</b>、<b>node scripts/push_sale_products.js</b>。</div>');
     }
 
     function big(v) {
@@ -1680,7 +1682,7 @@
 
     var html = viewHead('主播售卖明细',
       (s.dateFrom ? '数据区间 <b>' + esc(s.dateFrom) + ' ~ ' + esc(s.dateTo) + '</b> · ' : '') +
-      (s.anchors || 0) + ' 位主播 · ' + (s.records || 0) + ' 条场次 · 来源 2026年主播售卖表',
+      (s.anchors || 0) + ' 位主播 · ' + ((modules().saleProducts || {}).summary || {}).skus + ' 个商品 · 来源 2026年主播售卖表',
       '<span class="ph-hint">源表 1.8 GB · 单独低频同步</span>');
 
     html += kpiCards([
@@ -1717,32 +1719,113 @@
       '<div class="ph-tools"><span class="ph-hint">点图表可放大</span><button class="tbtn sm" data-role="img">导出图片</button></div></div>' + topBars + '</div>';
     html += '</div>';
 
-    // 明细：最新日期在前，同日按销售额降序
-    var dailyRows = rows.slice().sort(function (a, b) {
-      if (a.date !== b.date) return a.date < b.date ? 1 : -1;
-      return num(b.sales) - num(a.sales);
-    });
+    // ---------- 主播每日商品明细（商品级，替代原「场次明细」） ----------
+    var pm = modules().saleProducts || {};
+    var prodList = pm.products || [];
+    var anchorList = pm.anchors || [];
+    var items = pm.items || [];
+    var f = state.saleFilter || (state.saleFilter = { anchor: '', date: '' });
+    var attr = function (s) { return esc(s).replace(/"/g, '&quot;'); };
 
-    // 明细
-    html += '<div class="panel"><div class="panel-head"><div class="ph-title">每日售卖明细' +
-      '<span class="ph-sub">主播 × 日期 × 直播类型 · ' + rows.length + ' 条</span></div></div>' +
-      dataTable('saleDetail_daily', [
-        { key: 'date', label: '日期', cls: 'mono' },
-        { key: 'anchor', label: '主播' },
-        { key: 'type', label: '直播类型' },
-        { key: 'qty', label: '销量', cls: 'mono', render: function (r) { return num(r.qty).toLocaleString('zh-CN'); } },
-        { key: 'sales', label: '销售额(元)', cls: 'mono', render: function (r) { return money(r.sales); } },
-        { key: 'profit', label: '利润(元)', cls: 'mono', render: function (r) { return money(r.profit); } },
-        { key: 'nxSales', label: '次日销售额(元)', cls: 'mono', render: function (r) { return money(r.nxSales); } },
-        {
-          key: 'returnRate', label: '退货率', cls: 'mono', render: function (r) {
-            var v = num(r.returnRate);
-            var col = v >= 50 ? '#e5484d' : v >= 35 ? '#f5871f' : '#12a76c';
-            return '<span style="color:' + col + ';font-weight:700">' + pct1(v) + '</span>';
+    if (items.length) {
+      var picked = items.filter(function (it) {
+        if (f.anchor && anchorList[it[1]] !== f.anchor) return false;
+        if (f.date && it[0] !== f.date) return false;
+        return true;
+      });
+      // 日期倒序 · 同日按销售额降序
+      picked.sort(function (a, b) {
+        if (a[0] !== b[0]) return a[0] < b[0] ? 1 : -1;
+        return b[5] - a[5];
+      });
+
+      var goodsRows = picked.map(function (it) {
+        var p = prodList[it[3]] || {};
+        return {
+          date: it[0], anchor: anchorList[it[1]] || '', type: it[2],
+          name: p.name || '', cat: p.cat || '', price: p.price || 0,
+          qty: it[4], sales: it[5], profit: it[6], retRate: it[7]
+        };
+      });
+      var sumSales = 0;
+      goodsRows.forEach(function (x) { sumSales += num(x.sales); });
+
+      var dateSet = {};
+      items.forEach(function (it) { dateSet[it[0]] = 1; });
+      var dateList = Object.keys(dateSet).sort().reverse();
+
+      var extra = '<span class="tlabel">主播</span><select class="tselect" data-role="sale-anchor">' +
+        '<option value="">全部</option>' +
+        anchorList.map(function (a) {
+          return '<option value="' + attr(a) + '"' + (f.anchor === a ? ' selected' : '') + '>' + esc(a) + '</option>';
+        }).join('') + '</select>' +
+        '<span class="tlabel">日期</span><select class="tselect" data-role="sale-date">' +
+        '<option value="">全部</option>' +
+        dateList.map(function (d) {
+          return '<option value="' + attr(d) + '"' + (f.date === d ? ' selected' : '') + '>' + esc(d.slice(5)) + '</option>';
+        }).join('') + '</select>';
+
+      // 主播快捷标签：按累计销售额排序，点一下只看该主播
+      var chipOrder = (pm.byAnchor || []).map(function (x) { return x.anchor; });
+      if (!chipOrder.length) chipOrder = anchorList;
+      var chips = '<button class="sp-chip' + (f.anchor ? '' : ' active') + '" data-role="sale-pick" data-a="">全部主播</button>' +
+        chipOrder.map(function (a) {
+          return '<button class="sp-chip' + (f.anchor === a ? ' active' : '') + '" data-role="sale-pick" data-a="' + attr(a) + '">' + esc(a) + '</button>';
+        }).join('');
+
+      html += '<div class="panel"><div class="panel-head"><div class="ph-title">主播每日商品明细' +
+        '<span class="ph-sub">' + (f.anchor ? esc(f.anchor) : '全部主播') + ' · ' +
+        (f.date ? esc(f.date) : '全部日期') + ' · ' + goodsRows.length + ' 条 · 合计 ' + wan(sumSales) + ' 万</span></div></div>' +
+        '<div class="sp-anchors">' + chips + '</div>' +
+        dataTable('saleDetail_goods', [
+          { key: 'date', label: '日期', cls: 'mono' },
+          { key: 'anchor', label: '主播' },
+          {
+            key: 'name', label: '商品', render: function (r) {
+              return '<div class="sp-goods"><span class="sp-name" title="' + attr(r.name) + '">' + esc(r.name) + '</span>' +
+                (r.cat ? '<span class="sp-cat">' + esc(r.cat) + '</span>' : '') + '</div>';
+            }
+          },
+          { key: 'price', label: '单价(元)', cls: 'mono', render: function (r) { return money(r.price); } },
+          { key: 'qty', label: '销量', cls: 'mono', render: function (r) { return num(r.qty).toLocaleString('zh-CN'); } },
+          { key: 'sales', label: '销售额(元)', cls: 'mono', render: function (r) { return money(r.sales); } },
+          { key: 'profit', label: '利润(元)', cls: 'mono', render: function (r) { return money(r.profit); } },
+          {
+            key: 'retRate', label: '退货率', cls: 'mono', render: function (r) {
+              var v = num(r.retRate);
+              var col = v >= 50 ? '#e5484d' : v >= 35 ? '#f5871f' : '#12a76c';
+              return '<span style="color:' + col + ';font-weight:700">' + pct1(v) + '</span>';
+            }
           }
-        },
-        { key: 'd7Sales', label: '7日销售额(元)', cls: 'mono', render: function (r) { return money(r.d7Sales); } }
-      ], dailyRows, { pageSize: 20, exportName: '主播每日售卖明细', searchPlaceholder: '搜索主播 / 日期 / 直播类型…' }) + '</div>';
+        ], goodsRows, {
+          pageSize: 20, exportName: '主播每日商品明细',
+          searchPlaceholder: '搜索商品 / 类目 / 主播…',
+          extraTools: extra
+        }) + '</div>';
+    } else {
+      // 兜底：商品级数据还没同步时，退回原来的场次明细
+      var dailyRows = rows.slice().sort(function (a, b) {
+        if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+        return num(b.sales) - num(a.sales);
+      });
+      html += '<div class="panel"><div class="panel-head"><div class="ph-title">每日售卖明细' +
+        '<span class="ph-sub">主播 × 日期 × 直播类型 · ' + rows.length + ' 条</span></div></div>' +
+        dataTable('saleDetail_daily', [
+          { key: 'date', label: '日期', cls: 'mono' },
+          { key: 'anchor', label: '主播' },
+          { key: 'type', label: '直播类型' },
+          { key: 'qty', label: '销量', cls: 'mono', render: function (r) { return num(r.qty).toLocaleString('zh-CN'); } },
+          { key: 'sales', label: '销售额(元)', cls: 'mono', render: function (r) { return money(r.sales); } },
+          { key: 'profit', label: '利润(元)', cls: 'mono', render: function (r) { return money(r.profit); } },
+          {
+            key: 'returnRate', label: '退货率', cls: 'mono', render: function (r) {
+              var v = num(r.returnRate);
+              var col = v >= 50 ? '#e5484d' : v >= 35 ? '#f5871f' : '#12a76c';
+              return '<span style="color:' + col + ';font-weight:700">' + pct1(v) + '</span>';
+            }
+          }
+        ], dailyRows, { pageSize: 20, exportName: '主播每日售卖明细', searchPlaceholder: '搜索主播 / 日期 / 直播类型…' }) + '</div>';
+    }
 
     // 主播汇总
     html += '<div class="panel"><div class="panel-head"><div class="ph-title">主播售卖汇总' +
@@ -2240,6 +2323,16 @@
     document.addEventListener('click', function (e) {
       var t = e.target;
 
+      // 主播售卖页：点主播快捷标签 → 只看该主播
+      var sp = t.closest ? t.closest('[data-role="sale-pick"]') : null;
+      if (sp) {
+        state.saleFilter.anchor = sp.getAttribute('data-a') || '';
+        state.page['saleDetail_goods'] = 1;
+        state.search['saleDetail_goods'] = '';
+        renderView(true);
+        return;
+      }
+
       // 点图表任意位置 → 打开大图（放大按钮走自己的 handler，已 stopPropagation）
       var cm = t.closest ? t.closest('.chart-mount[data-mounted="1"]') : null;
       if (cm && !(t.closest && t.closest('button'))) {
@@ -2400,6 +2493,21 @@
       if (e.target && e.target.id === 'monthSelect') {
         state.month = e.target.value || '';
         Object.keys(state.page).forEach(function (k) { state.page[k] = 1; });
+        renderView(true);
+        return;
+      }
+      // 主播售卖页：主播 / 日期 筛选（商品明细）
+      var sa = e.target.closest ? e.target.closest('select[data-role="sale-anchor"]') : null;
+      if (sa) {
+        state.saleFilter.anchor = sa.value;
+        state.page['saleDetail_goods'] = 1;
+        renderView(true);
+        return;
+      }
+      var sd = e.target.closest ? e.target.closest('select[data-role="sale-date"]') : null;
+      if (sd) {
+        state.saleFilter.date = sd.value;
+        state.page['saleDetail_goods'] = 1;
         renderView(true);
         return;
       }
